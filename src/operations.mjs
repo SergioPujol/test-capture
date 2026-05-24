@@ -80,7 +80,11 @@ export function generateCoveragePlan(sessionId, cwd = process.cwd()) {
     session = readSession(session.id, cwd);
   }
   if (session.state === states.SCENARIO_DRAFTED) {
-    throw new Error(`Scenario must be approved before coverage planning. Run: test-capture approve-scenario ${session.id}`);
+    throw captureError(errorNames.InvalidSessionTransitionError, "Scenario must be approved before coverage planning.", {
+      sessionId: session.id,
+      operation: "get_coverage_plan",
+      nextSafeAction: `Run: test-capture approve-scenario ${session.id}`,
+    });
   }
   const index = readIndex(session.id, cwd);
   assertHasEvidence(index, session.id);
@@ -100,7 +104,11 @@ export function approveCoveragePlan(sessionId, cwd = process.cwd()) {
 export function linkGeneratedTest({ sessionId, file, command, status = "passing", cwd = process.cwd() }) {
   let session = readSession(sessionId, cwd);
   if (!atLeast(session.state, states.COVERAGE_APPROVED)) {
-    throw new Error(`Coverage plan must be approved before linking generated tests. Run: test-capture approve-coverage-plan ${session.id}`);
+    throw captureError(errorNames.InvalidSessionTransitionError, "Coverage plan must be approved before linking generated tests.", {
+      sessionId: session.id,
+      operation: "link_generated_test",
+      nextSafeAction: `Run: test-capture approve-coverage-plan ${session.id}`,
+    });
   }
   if (!fs.existsSync(path.join(repoRoot(cwd), file))) {
     throw captureError(errorNames.LedgerConsistencyError, `Linked test file does not exist: ${file}`, {

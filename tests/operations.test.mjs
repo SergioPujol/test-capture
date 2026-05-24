@@ -48,7 +48,9 @@ test("generates scenario and requires approval before coverage plan", () => {
   const session = capturedSession(cwd);
   const scenario = generateScenario(session.id, cwd);
   assert.match(scenario.content, /Admin edits billing email/);
-  assert.throws(() => generateCoveragePlan(session.id, cwd), /Scenario must be approved/);
+  assert.throws(() => generateCoveragePlan(session.id, cwd), {
+    name: "InvalidSessionTransitionError",
+  });
   approveScenario(session.id, cwd);
   const plan = generateCoveragePlan(session.id, cwd);
   assert.match(plan.content, /Proposed Test File/);
@@ -72,6 +74,12 @@ test("updates ledger only when linked test exists", () => {
   generateScenario(session.id, cwd);
   approveScenario(session.id, cwd);
   generateCoveragePlan(session.id, cwd);
+  assert.throws(() => linkGeneratedTest({
+    sessionId: session.id,
+    file: "e2e/admin-edits-billing-email.spec.ts",
+    command: "pnpm e2e",
+    cwd,
+  }), { name: "InvalidSessionTransitionError" });
   approveCoveragePlan(session.id, cwd);
   assert.throws(() => linkGeneratedTest({
     sessionId: session.id,
