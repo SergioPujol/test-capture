@@ -21,4 +21,12 @@ node ./bin/test-capture.js coverage-plan <session-id>
 node ./bin/test-capture.js testability <session-id>
 ```
 
+From Codex, use the installed skill entry point:
+
+```txt
+/test-capture --url http://localhost:3000 --description "Customer can save billing email"
+```
+
+Codex should launch the capture browser, wait while you manually verify the feature, inspect the generated artifacts, create or update the test, run it, fix failures, and link the passing test to the local ledger.
+
 The active coding agent should inspect the generated `agent-context.md`, confirm or edit the coverage plan with the developer, then write tests using the repository's existing conventions.
