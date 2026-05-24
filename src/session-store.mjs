@@ -111,6 +111,16 @@ export function readCaptureBuffer(sessionId, cwd = process.cwd()) {
   return readJson(file, "read_capture_buffer");
 }
 
+export function appendHumanMarker(sessionId, marker, cwd = process.cwd()) {
+  const capture = readCaptureBuffer(sessionId, cwd);
+  capture.humanMarkers = capture.humanMarkers ?? [];
+  capture.humanMarkers.push(marker);
+  writeCaptureBuffer(sessionId, capture, cwd);
+  const session = readSession(sessionId, cwd);
+  writeIndex(session, capture, cwd);
+  return marker;
+}
+
 export function readIndex(sessionId, cwd = process.cwd()) {
   return readJson(path.join(sessionDir(sessionId, cwd), "agent-safe-index.json"), "get_session_summary");
 }

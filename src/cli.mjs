@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createSession, listSessions, readIndex, readSession, sessionDir } from "./session-store.mjs";
+import { add_intent_marker } from "./agent-tools.mjs";
 import { detectRepo } from "./repo.mjs";
 import { recordInteractiveCapture } from "./recorder.mjs";
 import {
@@ -53,6 +54,7 @@ Commands:
   network <session-id>
   screenshots <session-id>
   selectors <session-id>
+  mark <session-id> --type assert|ignore|setup|bug|persist-after-reload|split-test [--note <text>] [--step <event-id>]
   coverage-plan <session-id>
   approve-scenario <session-id>
   approve-coverage-plan <session-id>
@@ -172,6 +174,16 @@ export async function runCli(args) {
     case "selectors": {
       const sessionId = requireArg(positionals[0], "selectors requires <session-id>");
       print(readIndex(sessionId).selectorCandidates, true);
+      return;
+    }
+    case "mark": {
+      const sessionId = requireArg(positionals[0], "mark requires <session-id>");
+      print(add_intent_marker({
+        sessionId,
+        type: requireArg(flags.type, "mark requires --type <marker>"),
+        note: flags.note || "",
+        stepId: flags.step,
+      }), true);
       return;
     }
     case "approve-scenario": {
