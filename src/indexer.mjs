@@ -19,6 +19,7 @@ export function buildAgentSafeIndex(session, capture = {}) {
       timestamp: redacted.timestamp,
       url: redacted.url,
       label: redacted.label,
+      labelSource: redacted.labelSource,
       role: redacted.role,
       selector: redacted.selector,
       selectorQuality: selectorQuality(redacted.selector),

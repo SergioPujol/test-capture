@@ -1,0 +1,27 @@
+{
+  "settleMs": 800,
+  "steps": [
+    { "action": "click", "selector": ".sidebar a[href=\"/billing\"]", "screenshot": "billing-page" },
+    { "action": "fill", "selector": "[data-testid=\"billing-admin-email\"]", "value": "admin.capture@example.com" },
+    { "action": "fill", "selector": "[data-testid=\"billing-password\"]", "value": "correct-horse-battery-staple" },
+    { "action": "fill", "selector": "[data-testid=\"billing-access-token\"]", "value": "secret-token-123" },
+    { "action": "fill", "selector": "[data-testid=\"billing-private-memo\"]", "value": "Private billing note" },
+    { "action": "fill", "selector": "[data-testid=\"unlabeled-reimbursement-code\"]", "value": "REIM-42" },
+    { "action": "marker", "type": "setup", "note": "Billing form values are privacy evidence, not final test assertions." },
+    { "action": "click", "selector": "[data-testid=\"submit-sensitive-flow\"]" },
+    { "action": "waitForText", "text": "Sensitive flow completed", "screenshot": "billing-success" },
+    { "action": "click", "selector": ".sidebar a[href=\"/activity\"]", "screenshot": "activity-page" },
+    { "action": "fill", "selector": "[data-testid=\"activity-search-input\"]", "value": "billing" },
+    { "action": "click", "selector": "[data-testid=\"activity-filter-button\"]" },
+    { "action": "click", "selector": "[data-testid=\"open-activity-act_001\"]" },
+    { "action": "waitForSelector", "selector": "[data-testid=\"confirm-modal-action\"]", "screenshot": "activity-modal" },
+    { "action": "click", "selector": "[data-testid=\"confirm-modal-action\"]" },
+    { "action": "click", "selector": ".sidebar a[href=\"/error-lab\"]", "screenshot": "error-lab-page" },
+    { "action": "click", "selector": "[data-testid=\"trigger-console-warning\"]" },
+    { "action": "click", "selector": "[data-testid=\"trigger-console-error\"]" },
+    { "action": "click", "selector": "[data-testid=\"trigger-slow-request\"]" },
+    { "action": "waitForText", "text": "Slow request completed" },
+    { "action": "click", "selector": "[data-testid=\"trigger-failed-request\"]" },
+    { "action": "waitForText", "text": "Synthetic billing gateway failure", "screenshot": "error-lab-failure" }
+  ]
+}

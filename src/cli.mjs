@@ -3,7 +3,7 @@ import path from "node:path";
 import { createSession, listSessions, readIndex, readSession, sessionDir } from "./session-store.mjs";
 import { add_intent_marker } from "./agent-tools.mjs";
 import { detectRepo } from "./repo.mjs";
-import { recordInteractiveCapture } from "./recorder.mjs";
+import { recordInteractiveCapture, recordScriptedCapture } from "./recorder.mjs";
 import {
   approveCoveragePlan,
   approveScenario,
@@ -47,6 +47,7 @@ function usage() {
 
 Commands:
   start --url <url> [--description <text>] [--screenshots]
+  scripted-capture --url <url> --script <file> [--description <text>] [--screenshots] [--headed]
   stop [session-id]
   list-sessions
   summary <session-id>
@@ -134,6 +135,24 @@ export async function runCli(args) {
       const result = await recordInteractiveCapture(session);
       generateScenario(result.session.id);
       print({ sessionId: result.session.id, state: "SCENARIO_DRAFTED", path: sessionDir(result.session.id) }, true);
+      return;
+    }
+    case "scripted-capture": {
+      const url = requireArg(flags.url, "scripted-capture requires --url <url>");
+      const scriptPath = requireArg(flags.script, "scripted-capture requires --script <file>");
+      const script = JSON.parse(fs.readFileSync(scriptPath, "utf8"));
+      const session = createSession({
+        url,
+        description: flags.description,
+        privacy: {
+          allowScreenshots: Boolean(flags.screenshots),
+          allowTypedText: Boolean(flags["typed-text"]),
+          allowNetworkBodies: Boolean(flags["network-bodies"]),
+        },
+      });
+      const result = await recordScriptedCapture(session, script, { headed: Boolean(flags.headed) });
+      generateScenario(result.session.id);
+      print({ sessionId: result.session.id, state: readSession(result.session.id).state, path: sessionDir(result.session.id) }, true);
       return;
     }
     case "stop": {

@@ -9,6 +9,7 @@ import {
   readSession,
   updateState,
   writeIndex,
+  writeSession,
   writeTextArtifact,
 } from "./session-store.mjs";
 import { draftAgentContext, draftCoveragePlan, draftScenario, draftTestability } from "./artifacts.mjs";
@@ -64,6 +65,7 @@ export function generateScenario(sessionId, cwd = process.cwd()) {
   if (session.state === states.CAPTURED) session = updateState(session.id, states.SCENARIO_DRAFTED, cwd);
   const content = draftScenario(session, index);
   writeTextArtifact(session.id, "scenario.md", content, cwd);
+  writeTextArtifact(session.id, "testability.md", draftTestability(index), cwd);
   writeTextArtifact(session.id, "agent-context.md", draftAgentContext(session, index), cwd);
   return { session: readSession(session.id, cwd), content };
 }
@@ -121,10 +123,14 @@ export function linkGeneratedTest({ sessionId, file, command, status = "passing"
     session = updateState(session.id, states.TEST_GENERATED, cwd, { generatedTests: [file] });
   }
   const verifiedState = status === "passing" ? states.VERIFIED : states.TRIAGE_NEEDED;
-  session = updateState(session.id, verifiedState, cwd, {
-    generatedTests: [file],
-    verification: { status, command },
-  });
+  if (session.state !== verifiedState) {
+    session = updateState(session.id, verifiedState, cwd, {
+      generatedTests: [file],
+      verification: { status, command },
+    });
+  } else {
+    session = writeSession({ ...session, generatedTests: [file], verification: { status, command } }, cwd);
+  }
   const entry = upsertLedgerEntry({
     session,
     generatedTests: [file],

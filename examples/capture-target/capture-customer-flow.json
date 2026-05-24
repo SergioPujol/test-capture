@@ -1,0 +1,13 @@
+{
+  "settleMs": 800,
+  "steps": [
+    { "action": "click", "selector": "[data-testid=\"start-customer-flow\"]", "screenshot": "customer-page" },
+    { "action": "waitForSelector", "selector": "[data-testid=\"billing-email-input\"]" },
+    { "action": "fill", "selector": "[data-testid=\"billing-email-input\"]", "value": "finance+capture@example.com" },
+    { "action": "select", "selector": "[data-testid=\"plan-select\"]", "value": "enterprise" },
+    { "action": "fill", "selector": "[data-testid=\"account-notes-input\"]", "value": "Captured by Test Capture dogfood" },
+    { "action": "marker", "type": "assert", "note": "Saving the edited customer profile should show the success toast." },
+    { "action": "click", "selector": "[data-testid=\"save-customer-button\"]" },
+    { "action": "waitForText", "text": "Billing email saved as", "screenshot": "customer-success" }
+  ]
+}

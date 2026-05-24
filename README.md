@@ -15,6 +15,7 @@ Run:
 ```sh
 node ./bin/test-capture.js doctor
 node ./bin/test-capture.js start --url http://localhost:3000
+node ./bin/test-capture.js scripted-capture --url http://localhost:3000 --script ./capture-flow.json --screenshots
 node ./bin/test-capture.js summary <session-id>
 node ./bin/test-capture.js coverage-plan <session-id>
 node ./bin/test-capture.js testability <session-id>

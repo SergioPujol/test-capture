@@ -141,6 +141,14 @@ export function draftTestability(index) {
   if (index.events.some((event) => event.type === "input" && !event.label)) {
     findings.push("- At least one input event lacked a label. Add an accessible label before relying on form selectors.");
   }
+  for (const event of index.events) {
+    if (event.type === "input" && ["placeholder", "name", "none"].includes(event.labelSource)) {
+      findings.push(`- Input selector \`${event.selector || "unknown"}\` used ${event.labelSource || "fallback"} text instead of an accessible label.`);
+    }
+    if (event.type === "click" && !event.label && event.selector) {
+      findings.push(`- Click target \`${event.selector}\` had no accessible name during capture.`);
+    }
+  }
   if (index.network.some((event) => event.status >= 400)) {
     findings.push("- Failing network responses appeared during capture. Review whether they are expected before asserting the flow.");
   }

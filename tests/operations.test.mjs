@@ -95,6 +95,13 @@ test("updates ledger only when linked test exists", () => {
     cwd,
   });
   assert.equal(linked.session.state, states.VERIFIED);
+  const relinked = linkGeneratedTest({
+    sessionId: session.id,
+    file: "e2e/admin-edits-billing-email.spec.ts",
+    command: "pnpm e2e",
+    cwd,
+  });
+  assert.equal(relinked.session.state, states.VERIFIED);
   assert.equal(readLedger(cwd)[0].status, "passing");
 });
 
