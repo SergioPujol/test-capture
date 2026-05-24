@@ -33,6 +33,16 @@ function atLeast(state, minimum) {
   return stateOrder.indexOf(state) >= stateOrder.indexOf(minimum);
 }
 
+function assertHasEvidence(index, sessionId) {
+  if (index.events.length === 0 && index.network.length === 0 && index.console.length === 0 && index.screenshots.length === 0) {
+    throw captureError(errorNames.InvalidSessionTransitionError, "Cannot summarize or plan coverage for an empty capture session.", {
+      sessionId,
+      operation: "summarize_session",
+      nextSafeAction: "Run a browser capture with at least one observed navigation, interaction, network event, console event, or screenshot.",
+    });
+  }
+}
+
 export function finalizeCapture(sessionId, cwd = process.cwd()) {
   const session = sessionId ? readSession(sessionId, cwd) : latestRecordingSession(cwd);
   if (!session) return null;
@@ -49,8 +59,9 @@ export function finalizeCapture(sessionId, cwd = process.cwd()) {
 export function generateScenario(sessionId, cwd = process.cwd()) {
   let session = readSession(sessionId, cwd);
   if (session.state === states.RECORDING) session = finalizeCapture(sessionId, cwd);
-  if (session.state === states.CAPTURED) session = updateState(session.id, states.SCENARIO_DRAFTED, cwd);
   const index = readIndex(session.id, cwd);
+  assertHasEvidence(index, session.id);
+  if (session.state === states.CAPTURED) session = updateState(session.id, states.SCENARIO_DRAFTED, cwd);
   const content = draftScenario(session, index);
   writeTextArtifact(session.id, "scenario.md", content, cwd);
   writeTextArtifact(session.id, "agent-context.md", draftAgentContext(session, index), cwd);
@@ -71,8 +82,9 @@ export function generateCoveragePlan(sessionId, cwd = process.cwd()) {
   if (session.state === states.SCENARIO_DRAFTED) {
     throw new Error(`Scenario must be approved before coverage planning. Run: test-capture approve-scenario ${session.id}`);
   }
-  if (session.state === states.SCENARIO_APPROVED) session = updateState(session.id, states.COVERAGE_PLANNED, cwd);
   const index = readIndex(session.id, cwd);
+  assertHasEvidence(index, session.id);
+  if (session.state === states.SCENARIO_APPROVED) session = updateState(session.id, states.COVERAGE_PLANNED, cwd);
   const content = draftCoveragePlan(session, index);
   writeTextArtifact(session.id, "coverage-plan.md", content, cwd);
   writeTextArtifact(session.id, "testability.md", draftTestability(index), cwd);

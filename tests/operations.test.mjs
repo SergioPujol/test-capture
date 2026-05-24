@@ -55,6 +55,17 @@ test("generates scenario and requires approval before coverage plan", () => {
   assert.match(plan.content, /e2e\/admin-edits-billing-email.spec.ts/);
 });
 
+test("refuses scenario generation for empty captures without advancing state", () => {
+  const cwd = tempProject();
+  let session = createSession({ url: "http://localhost:3000", cwd });
+  session = updateState(session.id, states.RECORDING, cwd);
+  session = updateState(session.id, states.CAPTURED, cwd);
+  writeIndex(session, { events: [], network: [], console: [], screenshots: [] }, cwd);
+  assert.throws(() => generateScenario(session.id, cwd), {
+    name: "InvalidSessionTransitionError",
+  });
+});
+
 test("updates ledger only when linked test exists", () => {
   const cwd = tempProject();
   const session = capturedSession(cwd);
