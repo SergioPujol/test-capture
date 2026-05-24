@@ -23,10 +23,10 @@ function push(capture, bucket, event) {
   capture[bucket].push({ ...event, timestamp: nowIso() });
 }
 
-async function maybeScreenshot(page, session, capture, label) {
+async function maybeScreenshot(page, session, capture, label, cwd = process.cwd()) {
   if (!session.privacy.allowScreenshots) return;
   const rel = path.join("screenshots", `${String(capture.screenshots.length + 1).padStart(4, "0")}.png`);
-  const abs = path.join(sessionDir(session.id), rel);
+  const abs = path.join(sessionDir(session.id, cwd), rel);
   await page.screenshot({ path: abs, fullPage: true });
   capture.screenshots.push({ id: `shot-${capture.screenshots.length + 1}`, path: rel, label });
 }
@@ -48,7 +48,6 @@ export async function recordInteractiveCapture(session, { cwd = process.cwd() } 
   await assertTargetReachable(session.target);
   const playwright = await loadPlaywright();
   const capture = { events: [], network: [], console: [], screenshots: [], humanMarkers: [], uncertainties: [] };
-  const recording = updateState(session.id, states.RECORDING, cwd);
   const userDataDir = path.join(sessionDir(session.id, cwd), "browser-profile");
   fs.mkdirSync(userDataDir, { recursive: true });
 
@@ -67,6 +66,7 @@ export async function recordInteractiveCapture(session, { cwd = process.cwd() } 
     });
   }
 
+  const recording = updateState(session.id, states.RECORDING, cwd);
   await context.tracing.start({ screenshots: session.privacy.allowScreenshots, snapshots: true, sources: false });
   await context.exposeBinding("__testCaptureEvent", async (_source, event) => {
     push(capture, "events", event);
@@ -137,11 +137,11 @@ export async function recordInteractiveCapture(session, { cwd = process.cwd() } 
   });
 
   await page.goto(recording.target, { waitUntil: "domcontentloaded" });
-  await maybeScreenshot(page, session, capture, "initial");
+  await maybeScreenshot(page, session, capture, "initial", cwd);
   const rl = readline.createInterface({ input, output });
   await rl.question("Interact with the browser, then press Enter here to stop capture.\n");
   rl.close();
-  await maybeScreenshot(page, session, capture, "final");
+  await maybeScreenshot(page, session, capture, "final", cwd);
   await context.tracing.stop({ path: path.join(sessionDir(session.id, cwd), "trace.zip") });
   await context.close();
   writeCaptureBuffer(session.id, capture, cwd);
