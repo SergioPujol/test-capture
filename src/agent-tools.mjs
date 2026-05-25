@@ -1,7 +1,7 @@
 import { createSession, appendHumanMarker, listSessions, readIndex, readSession, sessionDir, writeTextArtifact } from "./session-store.mjs";
 import { finalizeCapture, generateCoveragePlan, generateScenario, triageSessionFailure } from "./operations.mjs";
 import { readLedger } from "./ledger.mjs";
-import { draftAgentContext, draftTestability } from "./artifacts.mjs";
+import { draftAgentContext, draftTestability, selectorAutomationAnalysis } from "./artifacts.mjs";
 import { nowIso } from "./time.mjs";
 
 export function start_capture({ url, description, privacy, cwd = process.cwd() }) {
@@ -39,6 +39,10 @@ export function get_console_events({ sessionId, cwd = process.cwd() }) {
 
 export function get_selector_candidates({ sessionId, cwd = process.cwd() }) {
   return readIndex(sessionId, cwd).selectorCandidates;
+}
+
+export function get_selector_automation({ sessionId, cwd = process.cwd() }) {
+  return selectorAutomationAnalysis(readIndex(sessionId, cwd));
 }
 
 export function get_coverage_plan({ sessionId, cwd = process.cwd() }) {

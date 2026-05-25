@@ -12,7 +12,9 @@ import {
   generateScenario,
   linkGeneratedTest,
   triageSessionFailure,
+  writeSessionSummaries,
 } from "./operations.mjs";
+import { selectorAutomationAnalysis } from "./artifacts.mjs";
 import { readLedger } from "./ledger.mjs";
 import { sessionRoot } from "./paths.mjs";
 import { captureError, errorNames } from "./errors.mjs";
@@ -46,25 +48,28 @@ function usage() {
   return `Usage: test-capture <command>
 
 Commands:
-  start --url <url> [--description <text>] [--screenshots]
-  scripted-capture --url <url> --script <file> [--description <text>] [--screenshots] [--headed]
+  start --url <url> [--description <text>] [--screenshots] [--trace] [--preserve-profile]
+  scripted-capture --url <url> --script <file> [--description <text>] [--screenshots] [--trace] [--headed]
   stop [session-id]
   list-sessions
   summary <session-id>
   step <session-id> <n>
-  network <session-id>
+  report <session-id>
+  network <session-id> [--app-only]
+  console <session-id>
   screenshots <session-id>
   selectors <session-id>
+  selector-automation <session-id>
   mark <session-id> --type assert|ignore|setup|bug|persist-after-reload|split-test [--note <text>] [--step <event-id>]
   coverage-plan <session-id>
   approve-scenario <session-id>
   approve-coverage-plan <session-id>
   testability <session-id>
   triage <session-id> --test-output <file>
-  link-test <session-id> --file <path> --command <cmd> [--status passing|failing]
+  link-test <session-id> --file <path> --command <cmd> [--status passing|failing] [--deviation-reason <text>]
   ledger
   doctor
-  clean --yes`;
+  clean [session-id] --yes`;
 }
 
 function requireArg(value, message) {
@@ -82,6 +87,57 @@ function readTextArtifact(sessionId, artifact, cwd = process.cwd()) {
     });
   }
   return fs.readFileSync(file, "utf8");
+}
+
+function readJsonArtifact(sessionId, artifact, cwd = process.cwd()) {
+  const file = path.join(sessionDir(sessionId, cwd), artifact);
+  if (!fs.existsSync(file)) {
+    const session = readSession(sessionId, cwd);
+    const index = readIndex(sessionId, cwd);
+    writeSessionSummaries(session, index, cwd);
+  }
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function directorySizeBytes(dir) {
+  if (!fs.existsSync(dir)) return 0;
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += directorySizeBytes(file);
+    else total += fs.statSync(file).size;
+  }
+  return total;
+}
+
+function compactSession(session) {
+  const generatedTests = (session.generatedTests ?? []).map((item) => typeof item === "string" ? item : item.file);
+  const bytes = directorySizeBytes(sessionDir(session.id));
+  return {
+    id: session.id,
+    state: session.state,
+    description: session.description,
+    target: session.target,
+    updatedAt: session.updatedAt,
+    sizeBytes: bytes,
+    sizeMB: Number((bytes / 1024 / 1024).toFixed(2)),
+    generatedTests,
+  };
+}
+
+function doctorText({ ok, repo, playwrightImportable, nextActions }) {
+  return `Test Capture doctor
+
+Status: ${ok ? "ok" : "needs attention"}
+Repo: ${repo.root}
+Branch: ${repo.branch}
+Package manager: ${repo.packageManager}
+Playwright importable: ${playwrightImportable ? "yes" : "no"}
+.test-capture gitignored: ${repo.gitignoreWarnings.length ? "no" : "yes"}
+
+Next actions:
+${nextActions.length ? nextActions.map((item) => `- ${item}`).join("\n") : "- None"}
+`;
 }
 
 async function hasPlaywright() {
@@ -106,7 +162,7 @@ export async function runCli(args) {
       return;
     case "doctor": {
       const repo = detectRepo();
-      print({
+      const doctor = {
         ok: repo.gitignoreWarnings.length === 0,
         repo,
         playwrightImportable: await hasPlaywright(),
@@ -114,7 +170,8 @@ export async function runCli(args) {
           ...(repo.gitignoreWarnings.length ? ["Add .test-capture/ to .gitignore"] : []),
           ...((await hasPlaywright()) ? [] : ["Install Playwright in the host project to enable browser capture"]),
         ],
-      }, true);
+      };
+      print(json ? doctor : doctorText(doctor), json);
       return;
     }
     case "start": {
@@ -126,6 +183,8 @@ export async function runCli(args) {
           allowScreenshots: Boolean(flags.screenshots),
           allowTypedText: Boolean(flags["typed-text"]),
           allowNetworkBodies: Boolean(flags["network-bodies"]),
+          allowTrace: Boolean(flags.trace),
+          preserveProfile: Boolean(flags["preserve-profile"]),
         },
       });
       if (flags["no-browser"]) {
@@ -148,6 +207,7 @@ export async function runCli(args) {
           allowScreenshots: Boolean(flags.screenshots),
           allowTypedText: Boolean(flags["typed-text"]),
           allowNetworkBodies: Boolean(flags["network-bodies"]),
+          allowTrace: Boolean(flags.trace),
         },
       });
       const result = await recordScriptedCapture(session, script, { headed: Boolean(flags.headed) });
@@ -163,12 +223,20 @@ export async function runCli(args) {
       return;
     }
     case "list-sessions":
-      print(listSessions(), true);
+      print(flags.compact ? listSessions().map(compactSession) : listSessions(), true);
       return;
     case "summary": {
       const sessionId = requireArg(positionals[0], "summary requires <session-id>");
       const { content } = generateScenario(sessionId);
       print(content, json);
+      return;
+    }
+    case "report": {
+      const sessionId = requireArg(positionals[0], "report requires <session-id>");
+      const session = readSession(sessionId);
+      const index = readIndex(sessionId);
+      writeSessionSummaries(session, index);
+      print(readTextArtifact(sessionId, "report.md"), json);
       return;
     }
     case "step": {
@@ -182,7 +250,13 @@ export async function runCli(args) {
     }
     case "network": {
       const sessionId = requireArg(positionals[0], "network requires <session-id>");
-      print(readIndex(sessionId).network, true);
+      const summary = readJsonArtifact(sessionId, "network-summary.json");
+      print(flags["app-only"] ? summary.events.filter((event) => event.appRelevant) : summary.events, true);
+      return;
+    }
+    case "console": {
+      const sessionId = requireArg(positionals[0], "console requires <session-id>");
+      print(readJsonArtifact(sessionId, "console-summary.json"), true);
       return;
     }
     case "screenshots": {
@@ -193,6 +267,11 @@ export async function runCli(args) {
     case "selectors": {
       const sessionId = requireArg(positionals[0], "selectors requires <session-id>");
       print(readIndex(sessionId).selectorCandidates, true);
+      return;
+    }
+    case "selector-automation": {
+      const sessionId = requireArg(positionals[0], "selector-automation requires <session-id>");
+      print(selectorAutomationAnalysis(readIndex(sessionId)), true);
       return;
     }
     case "mark": {
@@ -239,6 +318,7 @@ export async function runCli(args) {
         file: requireArg(flags.file, "link-test requires --file <path>"),
         command: requireArg(flags.command, "link-test requires --command <cmd>"),
         status: flags.status || "passing",
+        deviationReason: flags["deviation-reason"],
       }), true);
       return;
     }
@@ -247,8 +327,11 @@ export async function runCli(args) {
       return;
     case "clean": {
       if (!flags.yes) throw new Error("clean requires --yes");
-      fs.rmSync(sessionRoot(), { recursive: true, force: true });
-      print({ cleaned: true }, true);
+      const sessionId = positionals[0];
+      const target = sessionId ? sessionDir(sessionId) : sessionRoot();
+      const bytes = directorySizeBytes(target);
+      fs.rmSync(target, { recursive: true, force: true });
+      print({ cleaned: true, target, freedBytes: bytes, freedMB: Number((bytes / 1024 / 1024).toFixed(2)) }, true);
       return;
     }
     default:

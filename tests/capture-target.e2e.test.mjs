@@ -33,6 +33,49 @@ test("capture target customer profile can be edited and saved", { skip: !baseUrl
   });
 });
 
+test("capture target customer can save billing admin email", { skip: !baseUrl }, async () => {
+  await withPage(async (page) => {
+    const unexpectedConsoleEvents = [];
+    page.on("console", (message) => {
+      const text = message.text();
+      const isKnownReactRouterWarning = text.includes("React Router Future Flag Warning");
+      if (["error", "warning"].includes(message.type()) && !isKnownReactRouterWarning) {
+        unexpectedConsoleEvents.push({ type: message.type(), text });
+      }
+    });
+
+    await page.goto(baseUrl);
+    await page.getByRole("link", { name: "Billing", exact: true }).click();
+
+    await page.getByLabel("Admin email").fill("billing-admin.generated@example.com");
+    await page.getByLabel("Password").fill("example-password");
+    await page.getByLabel("Access token").fill("example-token-123");
+    await page.getByLabel("Private billing memo").fill("Generated billing memo");
+
+    await assert.rejects(
+      page.getByText("billing-admin.generated@example.com").waitFor({ timeout: 250 }),
+    );
+
+    const loginResponsePromise = page.waitForResponse((response) =>
+      response.url().endsWith("/api/login") && response.request().method() === "POST",
+    );
+    const privateResponsePromise = page.waitForResponse((response) =>
+      response.url().includes("/api/private?token="),
+    );
+
+    await page.getByTestId("submit-sensitive-flow").click();
+    const [loginResponse, privateResponse] = await Promise.all([
+      loginResponsePromise,
+      privateResponsePromise,
+    ]);
+
+    assert.equal(loginResponse.status(), 200);
+    assert.equal(privateResponse.status(), 200);
+    await page.getByText("Sensitive flow completed").waitFor();
+    assert.deepEqual(unexpectedConsoleEvents, []);
+  });
+});
+
 test("capture target privacy, activity, and diagnostics flows expose expected evidence", { skip: !baseUrl }, async () => {
   await withPage(async (page) => {
     const consoleEvents = [];

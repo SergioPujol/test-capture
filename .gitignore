@@ -1,4 +1,5 @@
 .test-capture/
+.autoplan-restore/
 node_modules/
 dist/
 *.tsbuildinfo

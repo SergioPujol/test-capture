@@ -1,12 +1,12 @@
 import path from "node:path";
 import { provenance, schemaVersion } from "./provenance.mjs";
-import { redactEvent, redactionSummary } from "./privacy.mjs";
+import { redactEvent, redactText, redactionSummary } from "./privacy.mjs";
 
 function selectorQuality(selector) {
   if (!selector) return "unknown";
   if (/getBy(Role|Label|Text|TestId)|\[data-testid=/.test(selector)) return "preferred";
   if (/^#[A-Za-z][\w-]*$/.test(selector)) return "usable";
-  if (/nth-child| > |\.css-|:has\(/.test(selector)) return "brittle";
+  if (/canvas|svg|nth-child| > |\.css-|:has\(/i.test(selector)) return "brittle";
   return "review";
 }
 
@@ -79,17 +79,25 @@ export function buildAgentSafeIndex(session, capture = {}) {
       scenario: "scenario.md",
       coveragePlan: "coverage-plan.md",
       testability: "testability.md",
+      report: "report.md",
+      eventSummary: "event-summary.json",
+      networkSummary: "network-summary.json",
+      consoleSummary: "console-summary.json",
+      testabilitySummary: "testability-summary.json",
       network: "network.har",
       console: "console.log",
       screenshots: path.join("screenshots"),
-      trace: "trace.zip",
+      trace: session.privacy?.allowTrace ? "trace.zip" : null,
     },
     events,
     network,
     console: consoleEvents,
     screenshots,
     selectorCandidates,
-    humanMarkers: capture.humanMarkers ?? [],
+    humanMarkers: (capture.humanMarkers ?? []).map((marker) => ({
+      ...marker,
+      note: redactText(marker.note ?? ""),
+    })),
     uncertainties: capture.uncertainties ?? [],
     provenance: provenance.toolGenerated,
   };

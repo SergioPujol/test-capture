@@ -18,9 +18,11 @@ export function writeLedger(entries, cwd = process.cwd()) {
 
 export function upsertLedgerEntry({ session, scenario, generatedTests = [], status, command }, cwd = process.cwd()) {
   const root = repoRoot(cwd);
+  const generatedTestFiles = generatedTests.map((item) => typeof item === "string" ? item : item.file);
   for (const testFile of generatedTests) {
-    if (!fs.existsSync(path.join(root, testFile))) {
-      throw captureError(errorNames.LedgerConsistencyError, `Linked test file does not exist: ${testFile}`, {
+    const file = typeof testFile === "string" ? testFile : testFile.file;
+    if (!fs.existsSync(path.join(root, file))) {
+      throw captureError(errorNames.LedgerConsistencyError, `Linked test file does not exist: ${file}`, {
         sessionId: session.id,
         operation: "update_ledger",
         nextSafeAction: "Create the linked test file or remove it from the ledger update.",
@@ -31,7 +33,12 @@ export function upsertLedgerEntry({ session, scenario, generatedTests = [], stat
   const entry = {
     sessionId: session.id,
     scenario: scenario || session.description || "Captured browser verification",
-    generatedTests,
+    generatedTests: generatedTestFiles,
+    generatedTestLinks: generatedTests,
+    coveragePlanHash: session.coveragePlan?.hash,
+    assertionIds: session.coveragePlan?.assertionIds ?? [],
+    strategy: session.coveragePlan?.strategy,
+    strategyLabel: session.coveragePlan?.strategyLabel,
     status,
     command,
     lastVerified: nowIso(),

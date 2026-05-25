@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createSession, readIndex, readSession, updateState, writeCaptureBuffer, writeIndex } from "../src/session-store.mjs";
+import {
+  createSession,
+  readCaptureBuffer,
+  readIndex,
+  readSession,
+  updateState,
+  writeCaptureBuffer,
+  writeIndex,
+} from "../src/session-store.mjs";
 import { states } from "../src/states.mjs";
 
 function tempProject() {
@@ -48,4 +56,47 @@ test("indexes redacted captured events", () => {
   assert.equal(index.events[0].value, "[REDACTED]");
   assert.match(index.network[0].url, /token=%5BREDACTED%5D/);
   assert.equal(index.console[0].message, "Bearer [REDACTED]");
+});
+
+test("capture buffer persistence redacts sensitive values at the write boundary", () => {
+  const cwd = tempProject();
+  let session = createSession({
+    url: "http://localhost:3000",
+    cwd,
+    privacy: { allowScreenshots: true },
+  });
+  session = updateState(session.id, states.RECORDING, cwd);
+  session = updateState(session.id, states.CAPTURED, cwd);
+  writeCaptureBuffer(session.id, {
+    events: [
+      { type: "input", label: "Admin email", value: "admin@northstar.test" },
+      { type: "input", label: "Access token", value: "1234" },
+      { type: "input", label: "Private billing memo", value: "private test" },
+      { type: "input", label: "Reimbursement code", value: "reimbursement-code-test" },
+    ],
+    network: [{ method: "GET", url: "http://localhost:3000/api/private?token=1234", status: 200 }],
+    console: [{ type: "error", message: "Bearer raw-secret" }],
+    screenshots: [{ id: "shot-1", path: "screenshots/0001.png" }],
+    humanMarkers: [],
+    uncertainties: [],
+  }, cwd);
+
+  const persisted = readCaptureBuffer(session.id, cwd);
+  const text = JSON.stringify(persisted);
+  assert.doesNotMatch(text, /admin@northstar|private test|reimbursement-code-test|token=1234|raw-secret/);
+  assert.equal(persisted.events[0].value, "[MASKED]");
+  assert.equal(persisted.events[1].value, "[REDACTED]");
+  assert.equal(persisted.events[2].value, "[REDACTED]");
+  assert.equal(persisted.events[3].value, "[REDACTED]");
+  assert.equal(persisted.screenshots[0].sensitive, true);
+});
+
+test("agent-safe index reports default trace and browser profile as not persisted", () => {
+  const cwd = tempProject();
+  const session = createSession({ url: "http://localhost:3000", cwd, privacy: { allowScreenshots: true } });
+  const index = readIndex(session.id, cwd);
+  assert.equal(index.redaction.screenshotsMayContainSensitiveData, true);
+  assert.equal(index.redaction.tracePersisted, false);
+  assert.equal(index.redaction.browserProfilePersisted, false);
+  assert.equal(index.artifacts.trace, null);
 });

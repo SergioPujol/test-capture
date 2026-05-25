@@ -23,46 +23,52 @@ If `--url` is missing, ask for it. Do not start capture without a URL.
 
 ## Workflow
 
-1. Run `node ./bin/test-capture.js doctor`.
+1. Resolve the Test Capture runner before running any command.
+   - If `./bin/test-capture.js` exists in the current repository, use `node ./bin/test-capture.js`.
+   - Otherwise, use the installed Test Capture skill runner path from the local Codex skills directory.
+   - Keep the working directory set to the target application repository. The runner uses `process.cwd()` to write `.test-capture/` artifacts and inspect package/test conventions.
+
+2. Run `<runner> doctor`.
    - If Playwright is missing and this is the Test Capture repo, run `npm install`.
+   - If `./bin/test-capture.js` is missing in the target app repo but the installed skill runner exists, continue with that runner instead of treating it as a blocker.
    - If the target app is unreachable, ask the user to start it or provide the correct URL.
 
-2. Start manual capture from the repo root:
+3. Start manual capture from the target app repo root:
 
    ```sh
-   node ./bin/test-capture.js start --url <url> --description "<description>" --screenshots
+   <runner> start --url <url> --description "<description>" --screenshots
    ```
 
    Keep the command session open. It launches Chromium and waits for terminal input.
 
-3. Tell the user:
+4. Tell the user:
 
    ```txt
    The capture browser is open. Click through the feature and verify the behavior. When finished, tell me "done" and I will stop capture and generate the test.
    ```
 
-4. When the user says they are done, send a newline to the running capture process. Read the printed `sessionId`.
+5. When the user says they are done, send a newline to the running capture process. Read the printed `sessionId`.
 
-5. Inspect the capture:
+6. Inspect the capture:
 
    ```sh
-   node ./bin/test-capture.js summary <session-id>
-   node ./bin/test-capture.js selectors <session-id>
-   node ./bin/test-capture.js network <session-id>
-   node ./bin/test-capture.js testability <session-id>
-   node ./bin/test-capture.js approve-scenario <session-id>
-   node ./bin/test-capture.js coverage-plan <session-id>
-   node ./bin/test-capture.js approve-coverage-plan <session-id>
+   <runner> summary <session-id>
+   <runner> selectors <session-id>
+   <runner> network <session-id>
+   <runner> testability <session-id>
+   <runner> approve-scenario <session-id>
+   <runner> coverage-plan <session-id>
+   <runner> approve-coverage-plan <session-id>
    ```
 
-6. Generate or update a maintainable test in the repository.
+7. Generate or update a maintainable test in the repository.
    - Use repo conventions and existing test folders.
    - Prefer role, label, text, and test-id selectors.
    - Do not translate raw clicks one-for-one.
    - Do not persist secrets or raw typed sensitive values.
    - Include assertions from the approved coverage plan.
 
-7. Run the narrowest relevant test command.
+8. Run the narrowest relevant test command.
    - If `--command` was supplied, use it.
    - Otherwise infer from repo scripts and the new test file.
    - For the bundled example app, use:
@@ -71,21 +77,21 @@ If `--url` is missing, ask for it. Do not start capture without a URL.
      CAPTURE_TARGET_BASE_URL=<url> npm test
      ```
 
-8. If the test fails, triage with capture evidence:
+9. If the test fails, triage with capture evidence:
 
    ```sh
-   node ./bin/test-capture.js triage <session-id> --test-output <file-or-output>
+   <runner> triage <session-id> --test-output <file-or-output>
    ```
 
    Fix generated-test failures and rerun. Ask the user only when the expected behavior is ambiguous.
 
-9. Link the passing test:
+10. Link the passing test:
 
    ```sh
-   node ./bin/test-capture.js link-test <session-id> --file <test-file> --command "<command>" --status passing
+   <runner> link-test <session-id> --file <test-file> --command "<command>" --status passing
    ```
 
-10. Report:
+11. Report:
     - session id
     - generated/updated test file
     - command run

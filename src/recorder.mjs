@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -114,6 +115,38 @@ async function maybeScreenshot(page, session, capture, label, cwd = process.cwd(
   }
 }
 
+async function maybeStartTrace(context, session) {
+  if (!session.privacy.allowTrace) return false;
+  await context.tracing.start({
+    screenshots: session.privacy.allowScreenshots,
+    snapshots: true,
+    sources: false,
+  });
+  return true;
+}
+
+async function maybeStopTrace(context, session, cwd = process.cwd(), started = false) {
+  if (!started) return;
+  await context.tracing.stop({ path: path.join(sessionDir(session.id, cwd), "trace.zip") });
+}
+
+function browserProfileDir(session, cwd = process.cwd()) {
+  if (session.privacy.preserveProfile) {
+    const userDataDir = path.join(sessionDir(session.id, cwd), "browser-profile");
+    fs.mkdirSync(userDataDir, { recursive: true });
+    return { userDataDir, temporary: false };
+  }
+  return {
+    userDataDir: fs.mkdtempSync(path.join(os.tmpdir(), "test-capture-browser-profile-")),
+    temporary: true,
+  };
+}
+
+function cleanupBrowserProfile(profile) {
+  if (!profile.temporary) return;
+  fs.rmSync(profile.userDataDir, { recursive: true, force: true });
+}
+
 export async function assertTargetReachable(url) {
   try {
     const response = await fetch(url, { method: "HEAD", redirect: "manual" });
@@ -131,16 +164,16 @@ export async function recordInteractiveCapture(session, { cwd = process.cwd() } 
   await assertTargetReachable(session.target);
   const playwright = await loadPlaywright();
   const capture = { events: [], network: [], console: [], screenshots: [], humanMarkers: [], uncertainties: [] };
-  const userDataDir = path.join(sessionDir(session.id, cwd), "browser-profile");
-  fs.mkdirSync(userDataDir, { recursive: true });
+  const profile = browserProfileDir(session, cwd);
 
   let context;
   try {
-    context = await playwright.chromium.launchPersistentContext(userDataDir, {
+    context = await playwright.chromium.launchPersistentContext(profile.userDataDir, {
       headless: false,
       viewport: { width: 1280, height: 900 },
     });
   } catch (error) {
+    cleanupBrowserProfile(profile);
     throw captureError(errorNames.BrowserLaunchError, "Could not launch Chromium through Playwright.", {
       sessionId: session.id,
       operation: "start_capture",
@@ -150,7 +183,7 @@ export async function recordInteractiveCapture(session, { cwd = process.cwd() } 
   }
 
   const recording = updateState(session.id, states.RECORDING, cwd);
-  await context.tracing.start({ screenshots: session.privacy.allowScreenshots, snapshots: true, sources: false });
+  const traceStarted = await maybeStartTrace(context, recording);
 
   const page = context.pages()[0] ?? await context.newPage();
   await installPageCapture(context, page, capture);
@@ -161,12 +194,13 @@ export async function recordInteractiveCapture(session, { cwd = process.cwd() } 
   await rl.question("Interact with the browser, then press Enter here to stop capture.\n");
   rl.close();
   await maybeScreenshot(page, session, capture, "final", cwd);
-  await context.tracing.stop({ path: path.join(sessionDir(session.id, cwd), "trace.zip") });
+  await maybeStopTrace(context, recording, cwd, traceStarted);
   await context.close();
-  writeCaptureBuffer(session.id, capture, cwd);
+  cleanupBrowserProfile(profile);
+  const persistedCapture = writeCaptureBuffer(session.id, capture, cwd);
   const captured = updateState(session.id, states.CAPTURED, cwd);
-  writeIndex(captured, capture, cwd);
-  return { session: captured, capture };
+  writeIndex(captured, persistedCapture, cwd);
+  return { session: captured, capture: persistedCapture };
 }
 
 async function runScriptStep(page, step, capture) {
@@ -228,7 +262,7 @@ export async function recordScriptedCapture(session, script, { cwd = process.cwd
 
   const recording = updateState(session.id, states.RECORDING, cwd);
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await context.tracing.start({ screenshots: session.privacy.allowScreenshots, snapshots: true, sources: false });
+  const traceStarted = await maybeStartTrace(context, recording);
   const page = await context.newPage();
   await installPageCapture(context, page, capture);
   await page.goto(recording.target, { waitUntil: "domcontentloaded" });
@@ -241,11 +275,11 @@ export async function recordScriptedCapture(session, script, { cwd = process.cwd
 
   await page.waitForTimeout(script.settleMs ?? 500);
   await maybeScreenshot(page, session, capture, "final", cwd);
-  await context.tracing.stop({ path: path.join(sessionDir(session.id, cwd), "trace.zip") });
+  await maybeStopTrace(context, recording, cwd, traceStarted);
   await context.close();
   await browser.close();
-  writeCaptureBuffer(session.id, capture, cwd);
+  const persistedCapture = writeCaptureBuffer(session.id, capture, cwd);
   const captured = updateState(session.id, states.CAPTURED, cwd);
-  writeIndex(captured, capture, cwd);
-  return { session: captured, capture };
+  writeIndex(captured, persistedCapture, cwd);
+  return { session: captured, capture: persistedCapture };
 }

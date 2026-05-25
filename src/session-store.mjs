@@ -4,6 +4,7 @@ import { captureError, errorNames } from "./errors.mjs";
 import { sessionRoot } from "./paths.mjs";
 import { detectRepo } from "./repo.mjs";
 import { buildAgentSafeIndex } from "./indexer.mjs";
+import { sanitizeCaptureForPersistence } from "./privacy.mjs";
 import { states, assertTransition } from "./states.mjs";
 import { nowIso, safeTimestamp } from "./time.mjs";
 
@@ -65,6 +66,8 @@ export function createSession({ url, description, cwd = process.cwd(), privacy =
       allowScreenshots: Boolean(privacy.allowScreenshots),
       allowNetworkBodies: Boolean(privacy.allowNetworkBodies),
       allowTypedText: Boolean(privacy.allowTypedText),
+      allowTrace: Boolean(privacy.allowTrace),
+      preserveProfile: Boolean(privacy.preserveProfile),
     },
     repo: detectRepo(cwd),
     generatedTests: [],
@@ -101,8 +104,15 @@ export function writeIndex(session, capture, cwd = process.cwd()) {
 }
 
 export function writeCaptureBuffer(sessionId, capture, cwd = process.cwd()) {
-  writeJson(path.join(sessionDir(sessionId, cwd), "capture-buffer.json"), capture);
-  return capture;
+  const session = readSession(sessionId, cwd);
+  const sanitized = sanitizeCaptureForPersistence(session, capture);
+  writeJson(path.join(sessionDir(sessionId, cwd), "capture-buffer.json"), sanitized);
+  return sanitized;
+}
+
+export function writeJsonArtifact(sessionId, name, data, cwd = process.cwd()) {
+  writeJson(path.join(sessionDir(sessionId, cwd), name), data);
+  return data;
 }
 
 export function readCaptureBuffer(sessionId, cwd = process.cwd()) {
@@ -115,9 +125,9 @@ export function appendHumanMarker(sessionId, marker, cwd = process.cwd()) {
   const capture = readCaptureBuffer(sessionId, cwd);
   capture.humanMarkers = capture.humanMarkers ?? [];
   capture.humanMarkers.push(marker);
-  writeCaptureBuffer(sessionId, capture, cwd);
+  const persistedCapture = writeCaptureBuffer(sessionId, capture, cwd);
   const session = readSession(sessionId, cwd);
-  writeIndex(session, capture, cwd);
+  writeIndex(session, persistedCapture, cwd);
   return marker;
 }
 
