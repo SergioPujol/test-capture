@@ -1,5 +1,7 @@
 import { provenance } from "./provenance.mjs";
 
+const evidenceClassifications = new Set(["observed", "inferred", "substituted", "masked"]);
+
 function title(text) {
   return text?.trim() || "Captured browser verification";
 }
@@ -30,6 +32,299 @@ function addFinding(findings, finding) {
     sampleEventIds: [],
     ...finding,
   });
+}
+
+function uniq(items) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+function normalizeClassification(classification) {
+  return evidenceClassifications.has(classification) ? classification : "inferred";
+}
+
+function evidenceFact({ id, fact, source, classification = "observed", confidence = "medium", requiresApproval = false, approvedAt = null, provenance: factProvenance = provenance.toolGenerated }) {
+  return {
+    id: id || stableId("fact", fact),
+    fact,
+    source: Array.isArray(source) ? source : [source].filter(Boolean),
+    classification: normalizeClassification(classification),
+    confidence,
+    requiresApproval: Boolean(requiresApproval),
+    approvedAt,
+    provenance: factProvenance,
+  };
+}
+
+export function normalizeEvidenceFact({ fact, source, classification = "observed", requiresApproval = false, approvedAt = null, confidence = "high", id } = {}) {
+  if (!fact || !String(fact).trim()) throw new Error("Evidence fact requires non-empty fact text.");
+  if (!source || !String(source).trim()) throw new Error("Evidence fact requires --source.");
+  if (!evidenceClassifications.has(classification)) {
+    throw new Error(`Unsupported evidence classification: ${classification}`);
+  }
+  return evidenceFact({
+    id,
+    fact: String(fact).trim(),
+    source: String(source).trim(),
+    classification,
+    confidence,
+    requiresApproval,
+    approvedAt: requiresApproval ? approvedAt : (approvedAt || new Date().toISOString()),
+    provenance: provenance.humanApproved,
+  });
+}
+
+function recommendedLocatorForEvent(event = {}) {
+  const label = String(event.label || "").trim();
+  if (event.type === "input" && label && ["label", "aria-label"].includes(event.labelSource)) {
+    return {
+      locator: `page.getByLabel(${JSON.stringify(label)})`,
+      confidence: "high",
+      reason: "Element has an accessible label.",
+    };
+  }
+  if (event.selector && /\[data-testid=/.test(event.selector)) {
+    const testId = event.selector.match(/\[data-testid=["']([^"']+)["']\]/)?.[1];
+    if (testId) {
+      return {
+        locator: `page.getByTestId(${JSON.stringify(testId)})`,
+        confidence: "high",
+        reason: "Selector uses a stable data-testid.",
+      };
+    }
+  }
+  if (event.type === "click" && label && !/canvas|svg/i.test(event.selector || "")) {
+    const role = event.role || (/^button\b|button\[|\[role=["']button["']\]/i.test(event.selector || "") ? "button" : /^a\b|a\[|\[role=["']link["']\]/i.test(event.selector || "") ? "link" : "button");
+    return {
+      locator: `page.getByRole(${JSON.stringify(role)}, { name: ${JSON.stringify(label)} })`,
+      confidence: role === "button" || role === "link" ? "high" : "medium",
+      reason: "Click target has visible or accessible text.",
+    };
+  }
+  return null;
+}
+
+export function selectorRecommendations(index) {
+  const bySelector = new Map();
+  for (const event of index.events ?? []) {
+    if (!event.selector) continue;
+    const recommendation = recommendedLocatorForEvent(event);
+    if (!recommendation) continue;
+    if (!bySelector.has(event.selector)) {
+      bySelector.set(event.selector, {
+        selector: event.selector,
+        eventId: event.id,
+        element: event.label || event.selector,
+        recommendedLocator: recommendation.locator,
+        confidence: recommendation.confidence,
+        reason: recommendation.reason,
+        provenance: provenance.toolGenerated,
+      });
+    }
+  }
+  return [...bySelector.values()];
+}
+
+function consoleSemanticFacts(index) {
+  const facts = [];
+  for (const event of index.console ?? []) {
+    const message = event.message || "";
+    for (const match of message.matchAll(/\bselectedNodeId[:=]\s*([a-z][a-z0-9-]*-\d+)\b/gi)) {
+      facts.push(evidenceFact({
+        id: stableId("fact", `selected node ${match[1]}`),
+        fact: `Console output indicates selected node id ${match[1]}.`,
+        source: event.id,
+        classification: "inferred",
+        confidence: "medium",
+      }));
+    }
+  }
+  return facts;
+}
+
+function eventEvidenceFacts(index) {
+  const facts = [];
+  for (const event of index.events ?? []) {
+    if (["navigation", "load"].includes(event.type)) continue;
+    const source = event.id;
+    if (event.type === "click") {
+      const label = event.label || event.selector || "unnamed target";
+      facts.push(evidenceFact({
+        id: stableId("fact", `clicked ${source} ${label}`),
+        fact: `User clicked ${label}.`,
+        source,
+        classification: "observed",
+        confidence: event.label ? "high" : "medium",
+      }));
+      if (/canvas/i.test(event.selector || "")) {
+        facts.push(evidenceFact({
+          id: stableId("fact", `canvas substitution ${source}`),
+          fact: "Raw canvas click does not identify a semantic app object; browser e2e needs app instrumentation or a substituted selection mechanism.",
+          source,
+          classification: "substituted",
+          confidence: "high",
+        }));
+      }
+    }
+    if (event.type === "input") {
+      const label = event.label || event.selector || "unlabeled input";
+      const valueMasked = event.value === "[MASKED]" || event.value === "[REDACTED]";
+      facts.push(evidenceFact({
+        id: stableId("fact", `input ${source} ${label}`),
+        fact: valueMasked
+          ? `Field ${label} was edited; typed value is masked.`
+          : `Field ${label} was edited to ${event.value}.`,
+        source,
+        classification: valueMasked ? "masked" : "observed",
+        confidence: event.label ? "high" : "medium",
+        requiresApproval: valueMasked,
+      }));
+    }
+    if (event.type === "text" && event.text) {
+      facts.push(evidenceFact({
+        id: stableId("fact", `visible ${event.text}`),
+        fact: `Visible text appeared: ${event.text}.`,
+        source,
+        classification: "observed",
+        confidence: "high",
+      }));
+    }
+  }
+  return facts;
+}
+
+function networkEvidenceFacts(index) {
+  const targetOrigin = urlInfo(index.target).origin;
+  return (index.network ?? [])
+    .filter((event) => event.method || event.url)
+    .map((event) => {
+      const info = networkCategory(event, targetOrigin);
+      return { event, info };
+    })
+    .filter(({ info }) => ["app-api", "app"].includes(info.category))
+    .map(({ event, info }) => evidenceFact({
+      id: stableId("fact", `${event.method || "GET"} ${info.endpoint} ${event.status}`),
+      fact: `${event.method || "GET"} ${info.endpoint} returned ${event.status}.`,
+      source: event.id,
+      classification: "observed",
+      confidence: "high",
+    }));
+}
+
+function screenshotEvidenceFacts(index) {
+  return (index.screenshots ?? []).map((screenshot) => evidenceFact({
+    id: stableId("fact", `screenshot ${screenshot.id}`),
+    fact: `Screenshot ${screenshot.label || screenshot.id} is available at ${screenshot.path}; confirm any screenshot-derived values with evidence-add before using them in tests.`,
+    source: screenshot.path,
+    classification: "inferred",
+    confidence: "medium",
+    requiresApproval: true,
+  }));
+}
+
+export function buildEvidencePack(session, index) {
+  const generatedFacts = [
+    evidenceFact({
+      id: "fact-user-goal",
+      fact: `User goal: ${title(session.description)}.`,
+      source: "session.description",
+      classification: "observed",
+      confidence: session.description ? "high" : "medium",
+    }),
+    ...eventEvidenceFacts(index),
+    ...networkEvidenceFacts(index),
+    ...consoleSemanticFacts(index),
+    ...screenshotEvidenceFacts(index),
+    ...selectorRecommendations(index).map((item) => evidenceFact({
+      id: stableId("fact", `locator ${item.selector}`),
+      fact: `Recommended locator for ${item.element}: ${item.recommendedLocator}.`,
+      source: item.eventId,
+      classification: "inferred",
+      confidence: item.confidence,
+    })),
+  ];
+  const manualFacts = (session.evidenceFacts ?? []).map((fact) => evidenceFact({
+    ...fact,
+    classification: normalizeClassification(fact.classification),
+    provenance: fact.provenance || provenance.humanApproved,
+  }));
+  const facts = [];
+  const seen = new Set();
+  for (const fact of [...generatedFacts, ...manualFacts]) {
+    const key = `${fact.classification}:${fact.fact}:${fact.source.join("|")}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    facts.push(fact);
+  }
+  const byClassification = facts.reduce((acc, fact) => {
+    acc[fact.classification] = (acc[fact.classification] ?? 0) + 1;
+    return acc;
+  }, {});
+  return {
+    sessionId: session.id,
+    target: session.target,
+    description: session.description,
+    facts,
+    selectorRecommendations: selectorRecommendations(index),
+    summary: {
+      totalFacts: facts.length,
+      byClassification,
+      requiresApprovalCount: facts.filter((fact) => fact.requiresApproval && !fact.approvedAt).length,
+    },
+    provenance: provenance.agentAuthored,
+  };
+}
+
+export function draftEvidencePack(session, index) {
+  const pack = buildEvidencePack(session, index);
+  const factsByType = (classification) => pack.facts.filter((fact) => fact.classification === classification);
+  const renderFacts = (facts) => facts.length
+    ? facts.map((fact) => `- [${fact.id}] ${fact.fact} Source: ${fact.source.join(", ")}. Confidence: ${fact.confidence}${fact.requiresApproval && !fact.approvedAt ? " Requires approval." : ""}`).join("\n")
+    : "- None";
+  return `# Evidence Pack
+
+Provenance: ${provenance.agentAuthored}
+Source session: ${session.id}
+
+## Summary
+
+- Total facts: ${pack.summary.totalFacts}
+- Observed facts: ${pack.summary.byClassification.observed ?? 0}
+- Inferred facts: ${pack.summary.byClassification.inferred ?? 0}
+- Substituted facts: ${pack.summary.byClassification.substituted ?? 0}
+- Masked facts: ${pack.summary.byClassification.masked ?? 0}
+- Facts still requiring approval: ${pack.summary.requiresApprovalCount}
+
+## Observed Facts
+
+${renderFacts(factsByType("observed"))}
+
+## Inferred Facts
+
+${renderFacts(factsByType("inferred"))}
+
+## Substituted Mechanics
+
+${renderFacts(factsByType("substituted"))}
+
+## Masked Or Approval-Gated Facts
+
+${renderFacts(factsByType("masked").concat(pack.facts.filter((fact) => fact.requiresApproval && fact.classification !== "masked")))}
+
+## Selector Recommendations
+
+${pack.selectorRecommendations.length
+    ? pack.selectorRecommendations.map((item) => `- ${item.element}: ${item.recommendedLocator} (${item.confidence}; ${item.reason})`).join("\n")
+    : "- No stable locator recommendations were inferred."}
+`;
+}
+
+function conciseScenarioSlug(description = "") {
+  const words = description
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter((word) => word && !new Set(["the", "a", "an", "from", "with", "and", "or", "to", "it", "being", "see", "seen", "after", "before", "on", "in", "of", "for", "all"]).has(word));
+  return words.slice(0, 5).join("-") || "captured-scenario";
 }
 
 function statusFamily(status) {
@@ -246,6 +541,7 @@ export function selectorAutomationAnalysis(index) {
   const interactionEvents = (index.events ?? []).filter((event) => ["click", "input"].includes(event.type));
   const analyzedEvents = interactionEvents.map((event) => {
     const viability = selectorViabilityForSelector(event.selector, event);
+    const recommendation = recommendedLocatorForEvent(event);
     return {
       eventId: event.id,
       type: event.type,
@@ -253,6 +549,8 @@ export function selectorAutomationAnalysis(index) {
       label: event.label,
       viability: viability.level,
       reason: viability.reason,
+      recommendedLocator: recommendation?.locator ?? null,
+      recommendationConfidence: recommendation?.confidence ?? null,
     };
   });
   const overall = analyzedEvents.reduce((level, event) => worseViability(level, event.viability), analyzedEvents.length ? "high" : "unknown");
@@ -269,7 +567,7 @@ export function selectorAutomationAnalysis(index) {
           : "Add a stable role, label, text, or test id before relying on browser automation.",
     }));
   const guidance = overall === "low"
-    ? "Browser automation viability is low. Prefer lower-level state/model coverage or add instrumentation before e2e."
+    ? "Raw browser replay viability is low. Prefer lower-level state/model coverage, or add stable app instrumentation before browser e2e."
     : overall === "medium"
       ? "Browser automation may be viable, but the agent should verify selectors against existing test conventions."
       : overall === "high"
@@ -338,19 +636,17 @@ export function coverageStrategy(session, index) {
     strategy = selectorAnalysis.overall === "low" ? "state-integration" : "integration";
     label = selectorAnalysis.overall === "low" ? "Repo-native state/integration test" : "Repo-native integration test";
     rationale = selectorAnalysis.overall === "low"
-      ? "The repo has a unit/integration runner, while browser automation is weak from captured selectors."
+      ? "The repo has a unit/integration runner, while raw browser replay is weak from captured selectors."
       : "The repo already has a non-browser test runner and no configured browser e2e runner should be added by default.";
   } else if (hasBrowserRunner) {
     strategy = "manual-blocker";
     label = "Instrumentation needed before browser e2e";
-    rationale = "The repo has a browser runner, but captured selectors are too weak for a maintainable browser test.";
+    rationale = "The repo has a browser runner, but captured selectors are too weak for raw browser replay. Browser e2e can still be viable with app instrumentation.";
   }
 
   const command = commandForStrategy(repo, strategy);
   if (strategy !== "manual-blocker") {
-    const fileSlug = session.description
-      ? session.description.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-      : session.id.toLowerCase();
+    const fileSlug = session.description ? conciseScenarioSlug(session.description) : session.id.toLowerCase();
     const root = preferredTestRoot(repo, strategy);
     const extension = strategy === "browser-e2e"
       ? (repo.testStack?.frameworks?.includes("playwright") ? ".spec.ts" : ".spec.js")
@@ -516,6 +812,7 @@ export function buildSessionSummaries(session, index) {
   const eventSummary = summarizeEvents(index);
   const automation = selectorAutomationAnalysis(index);
   const strategy = coverageStrategy(session, index);
+  const evidencePack = buildEvidencePack(session, index);
   return {
     eventSummary,
     networkSummary: network,
@@ -529,6 +826,7 @@ export function buildSessionSummaries(session, index) {
       findings: testability,
     },
     coverageStrategy: strategy,
+    evidencePack,
     report: {
       sessionId: session.id,
       state: session.state,
@@ -542,6 +840,7 @@ export function buildSessionSummaries(session, index) {
         automationViability: automation.overall,
       },
       nextActions: [
+        ...(evidencePack.summary.requiresApprovalCount ? ["Confirm approval-gated evidence facts before using screenshot-derived or masked values in tests."] : []),
         ...(scenarioMismatchWarnings(session, index).length ? ["Resolve scenario/behavior mismatch before generating tests."] : []),
         ...(automation.blockers.length ? ["Treat selector automation blockers as coverage strategy input before generating browser tests."] : []),
         ...(testability.length ? ["Review deduped testability findings and fix high-severity accessibility gaps."] : []),
@@ -570,6 +869,10 @@ export function draftScenario(session, index) {
   const assertions = assertionCandidates(index);
   const risks = flakeRisks(index);
   const mismatches = scenarioMismatchWarnings(session, index);
+  const pack = buildEvidencePack(session, index);
+  const keyFacts = pack.facts
+    .filter((fact) => ["observed", "inferred"].includes(fact.classification) && !fact.requiresApproval)
+    .slice(0, 8);
   return `# Scenario
 
 Provenance: ${provenance.agentAuthored}
@@ -588,6 +891,11 @@ ${title(session.description)}
 ## Behavior Observed
 
 ${mainBehavior(index)}
+
+## Evidence Gate
+
+${keyFacts.length ? keyFacts.map((fact) => `- [${fact.classification}] ${fact.fact} Source: ${fact.source.join(", ")}.`).join("\n") : "- No approved evidence facts are available yet."}
+- Full evidence pack: evidence-pack.md
 
 ## Intent Warnings
 
@@ -608,10 +916,12 @@ ${index.uncertainties.length ? index.uncertainties.map((item) => `- ${item}`).jo
 }
 
 export function draftCoveragePlan(session, index) {
-  const assertions = assertionCandidates(index);
+  const outline = buildTestOutline(session, index);
+  const assertions = outline.requiredAssertions;
   const strategy = coverageStrategy(session, index);
   const repo = session.repo ?? {};
   const testStack = repo.testStack ?? {};
+  const pack = buildEvidencePack(session, index);
   return `# Coverage Plan
 
 Provenance: ${provenance.agentAuthored}
@@ -625,6 +935,8 @@ Source session: ${session.id}
 - Reason: ${strategy.rationale}
 - Browser automation viability: ${strategy.selectorViability}. ${strategy.selectorGuidance}
 - Recommended command: ${strategy.command || "blocked until the agent confirms the repo test command"}
+- Evidence facts: ${pack.summary.totalFacts} total; ${pack.summary.requiresApprovalCount} still require approval before use in tests
+- Test outline: test-outline.md and test-outline.json
 
 ## Repo Constraints
 
@@ -651,11 +963,28 @@ ${strategy.automationBlockers.length
 - Use the recommended strategy above; do not add a new test runner just because the flow was captured in a browser.
 - Start with one focused test for the confirmed scenario.
 - Split only if the developer marked setup, bug reproduction, or persistence as separate concerns.
-- If browser automation viability is low, prefer state, model, reducer, service, or component-boundary coverage over brittle e2e clicks.
+- If raw browser replay viability is low, prefer state/model coverage or add app instrumentation before browser e2e.
+- Browser e2e is acceptable only when substituted mechanics are explicit and the business assertions still map to evidence-pack facts.
+- Lower-level tests are acceptable only when they preserve the captured business assertion.
+
+## Test Outline Contract
+
+- Browser e2e allowed: ${outline.allowedMechanics.browserE2EAllowed ? "yes" : "no"}
+- Raw canvas/SVG replay allowed: ${outline.allowedMechanics.rawCanvasReplayAllowed ? "yes" : "no"}
+- Blocked facts: ${outline.blockedFacts.length}
+- Substitution requirements: ${outline.substitutionRequirements.join(" ")}
 
 ## Assertions To Include
 
 ${assertions.length ? assertions.map((item) => `- [${item.id}] ${item.text}`).join("\n") : "- Block test generation until the developer confirms at least one expected result."}
+
+## Evidence Facts To Preserve
+
+${pack.facts
+    .filter((fact) => ["observed", "inferred"].includes(fact.classification) && !fact.requiresApproval)
+    .slice(0, 10)
+    .map((fact) => `- [${fact.id}] ${fact.fact}`)
+    .join("\n") || "- Add or confirm evidence facts before writing tests."}
 
 ## Intent Warnings
 
@@ -692,8 +1021,95 @@ ${[
     assertions.length ? "Confirm this coverage plan before generating or linking tests." : "What exact outcome should the generated test assert?",
     ...(strategy.strategy === "manual-blocker" ? ["Which existing test runner and file convention should the agent use?"] : []),
     ...(strategy.automationBlockers.length ? ["Should the agent write lower-level coverage now, or should the app expose stable instrumentation first?"] : []),
+    ...(pack.summary.requiresApprovalCount ? ["Should approval-gated screenshot or masked facts be confirmed with evidence-add before test generation?"] : []),
   ].map((item) => `- ${item}`).join("\n")}
 `;
+}
+
+export function draftTestOutline(session, index) {
+  const outline = buildTestOutline(session, index);
+  return `# Test Outline
+
+Provenance: ${provenance.agentAuthored}
+Source session: ${session.id}
+
+## Test Intent
+
+${outline.intent}
+
+## Facts The Test May Use
+
+${outline.usableFacts.length ? outline.usableFacts.map((fact) => `- [${fact.classification}] ${fact.fact} Source: ${fact.source.join(", ")}.`).join("\n") : "- No confirmed facts are available yet."}
+
+## Required Assertions
+
+${outline.requiredAssertions.length ? outline.requiredAssertions.map((item) => `- [${item.id}] ${item.text}`).join("\n") : "- Block test generation until the developer confirms at least one expected result."}
+
+## Allowed Mechanics
+
+- Strategy: ${outline.allowedMechanics.strategyLabel} (${outline.allowedMechanics.strategy})
+- Browser e2e allowed: ${outline.allowedMechanics.browserE2EAllowed ? "yes" : "no"}
+- Raw canvas/SVG replay allowed: ${outline.allowedMechanics.rawCanvasReplayAllowed ? "yes" : "no"}
+- Guidance: ${outline.allowedMechanics.guidance}
+
+## Blocked Or Unapproved Facts
+
+${outline.blockedFacts.length ? outline.blockedFacts.map((fact) => `- [${fact.classification}] ${fact.fact} Source: ${fact.source.join(", ")}.`).join("\n") : "- None"}
+
+## Substitution Requirements
+
+${outline.substitutionRequirements.length ? outline.substitutionRequirements.map((item) => `- ${item}`).join("\n") : "- None"}
+
+## Required Test Discipline
+
+- Cite evidence-pack facts when choosing domain ids, field values, selectors, and assertions.
+- Do not replay raw canvas/SVG clicks unless app instrumentation maps the action to a semantic object.
+- Use substituted values only with a deviation or substitution reason.
+- Use recommended locators where available.
+
+## Recommended Locators
+
+${outline.recommendedLocators.length
+    ? outline.recommendedLocators.map((item) => `- ${item.element}: ${item.recommendedLocator}`).join("\n")
+    : "- No recommended locators were inferred."}
+`;
+}
+
+export function buildTestOutline(session, index) {
+  const pack = buildEvidencePack(session, index);
+  const strategy = coverageStrategy(session, index);
+  const requiredAssertions = assertionCandidates(index);
+  const usableFacts = pack.facts.filter((fact) => !fact.requiresApproval || fact.approvedAt);
+  const approvalFacts = pack.facts.filter((fact) => fact.requiresApproval && !fact.approvedAt);
+  const substitutedFacts = pack.facts.filter((fact) => fact.classification === "substituted");
+  return {
+    sessionId: session.id,
+    intent: title(session.description),
+    evidencePack: "evidence-pack.json",
+    requiredAssertions,
+    allowedMechanics: {
+      strategy: strategy.strategy,
+      strategyLabel: strategy.label,
+      browserE2EAllowed: strategy.strategy === "browser-e2e" && strategy.selectorViability !== "low",
+      rawCanvasReplayAllowed: false,
+      recommendedCommand: strategy.command,
+      proposedTestFile: strategy.proposedTestFile,
+      selectorViability: strategy.selectorViability,
+      guidance: strategy.selectorGuidance,
+      automationBlockers: strategy.automationBlockers,
+    },
+    recommendedLocators: pack.selectorRecommendations,
+    usableFacts,
+    blockedFacts: [...approvalFacts, ...substitutedFacts],
+    substitutionRequirements: [
+      "Every domain id, business value, field value, and visible assertion must come from usable evidence-pack facts.",
+      "Screenshot facts are references only; add a confirmed observed fact with evidence-add before relying on screenshot-derived values.",
+      "Masked typed values must not be persisted raw unless the session privacy settings explicitly allowed typed text capture.",
+      "Any intentional substitute fixture, id, name, or value must be linked with a clear deviation/substitution reason.",
+      ...(strategy.automationBlockers.length ? ["Raw canvas/SVG replay is blocked unless app instrumentation maps the action to a semantic object."] : []),
+    ],
+    provenance: provenance.agentAuthored,
+  };
 }
 
 export function draftTestability(index) {
@@ -750,6 +1166,8 @@ The agent-safe index contains ${index.events.length} UI events, ${index.network.
 - Agent-safe index: agent-safe-index.json
 - Scenario draft: scenario.md
 - Coverage plan: coverage-plan.md
+- Evidence pack: evidence-pack.md and evidence-pack.json
+- Test outline: test-outline.md, when generated
 - Testability findings: testability.md
 - Event summary: event-summary.json
 - Network summary: network-summary.json
@@ -762,6 +1180,7 @@ The agent-safe index contains ${index.events.length} UI events, ${index.network.
 
 - Verify the repository's existing test style before editing tests.
 - Use confirmed intent and stable selectors, not a literal recording of every click.
+- Use evidence-pack facts as the source of truth for domain ids, field values, selectors, and assertions.
 - Keep secrets out of generated tests and fixtures.
 - Ask for clarification before generating a test if the coverage plan has blocking questions.
 - Run the narrowest relevant test command first, then update the ledger only after the test passes.

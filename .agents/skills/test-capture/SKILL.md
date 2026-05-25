@@ -24,16 +24,17 @@ If `--url` is missing, ask for it. Do not start capture without a URL.
 ## Workflow
 
 1. Resolve the Test Capture runner before running any command.
-   - If `./bin/test-capture.js` exists in the current repository, use `node ./bin/test-capture.js`.
+   - First identify the current repository root, even when Codex starts inside a subdirectory such as an example app.
+   - If `<repo-root>/bin/test-capture.js` exists in the current repository, use that local runner from the repo root, for example `node ./bin/test-capture.js` or `node ../../bin/test-capture.js` depending on the command working directory.
    - Otherwise, use the installed Test Capture skill runner path from the local Codex skills directory.
-   - Keep the working directory set to the target application repository. The runner uses `process.cwd()` to write `.test-capture/` artifacts and inspect package/test conventions.
+   - Keep the working directory set to the repository that should receive `.test-capture/` artifacts and generated tests. If the app being captured lives in a subdirectory of that repo, start its dev server from the app directory but run Test Capture commands from the repo root.
 
-2. Run `<runner> doctor`.
+2. Run `<runner> doctor --url <url>`.
    - If Playwright is missing and this is the Test Capture repo, run `npm install`.
    - If `./bin/test-capture.js` is missing in the target app repo but the installed skill runner exists, continue with that runner instead of treating it as a blocker.
    - If the target app is unreachable, ask the user to start it or provide the correct URL.
 
-3. Start manual capture from the target app repo root:
+3. Start manual capture from the repository root that should store the capture artifacts:
 
    ```sh
    <runner> start --url <url> --description "<description>" --screenshots
@@ -56,17 +57,37 @@ If `--url` is missing, ask for it. Do not start capture without a URL.
    <runner> selectors <session-id>
    <runner> network <session-id>
    <runner> testability <session-id>
-   <runner> approve-scenario <session-id>
+   <runner> evidence-pack <session-id>
+   <runner> evidence-pack <session-id> --json
+   <runner> test-outline <session-id>
+   <runner> test-outline <session-id> --json
    <runner> coverage-plan <session-id>
-   <runner> approve-coverage-plan <session-id>
    ```
+
+   Read the scenario, testability findings, evidence pack, structured test outline, and coverage plan before approving them. Treat `evidence-pack.md` / `evidence-pack.json` as the source of truth for domain ids, typed values, selectors, and assertions. Treat `test-outline.md` / `test-outline.json` as the contract for required assertions, allowed mechanics, recommended locators, blocked facts, and substitution requirements. Screenshot-derived or masked values must be confirmed with:
+
+   ```sh
+   <runner> evidence-add <session-id> --fact "<confirmed fact>" --source <event-id-or-artifact-path> --classification observed
+   ```
+
+   If a manual fact was added with `--requires-approval`, approve it only after inspection:
+
+   ```sh
+   <runner> evidence-approve <session-id> --fact-id <manual-fact-id>
+   ```
+
+   Do not approve generated screenshot reference facts in place. They only prove that a screenshot file exists; values read from screenshots must be added as explicit observed facts.
+
+   Only run `approve-scenario` and `approve-coverage-plan` after confirming they match the captured intent and evidence. If either artifact has a "Blocking Questions" section, approval-gated evidence, or calls out a strategy choice that changes the test shape, ask the user for that decision instead of self-approving it.
 
 7. Generate or update a maintainable test in the repository.
    - Use repo conventions and existing test folders.
    - Prefer role, label, text, and test-id selectors.
    - Do not translate raw clicks one-for-one.
    - Do not persist secrets or raw typed sensitive values.
-   - Include assertions from the approved coverage plan.
+   - Do not invent domain ids, field values, visible text, role names, constants, or fixture values from repo knowledge when evidence has observed values. If substitution is necessary, record the reason and expect `link-test` to validate it.
+   - Do not replay raw canvas/SVG clicks when the test outline says browser e2e needs instrumentation or lower-level coverage.
+   - Include assertions from the structured test outline and approved coverage plan.
 
 8. Run the narrowest relevant test command.
    - If `--command` was supplied, use it.
@@ -90,6 +111,8 @@ If `--url` is missing, ask for it. Do not start capture without a URL.
    ```sh
    <runner> link-test <session-id> --file <test-file> --command "<command>" --status passing
    ```
+
+   If the test intentionally substitutes fixture values or mechanics, pass a concrete substitution/deviation reason. Do not use a deviation reason to bypass raw canvas replay that the outline marks unsupported.
 
 11. Report:
     - session id

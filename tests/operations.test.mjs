@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createSession, updateState, writeCaptureBuffer, writeIndex } from "../src/session-store.mjs";
+import { createSession, readSession, updateState, writeCaptureBuffer, writeIndex } from "../src/session-store.mjs";
 import { states } from "../src/states.mjs";
 import {
   approveCoveragePlan,
   approveScenario,
+  addEvidenceFact,
   generateCoveragePlan,
   generateScenario,
   linkGeneratedTest,
@@ -241,6 +242,92 @@ test("link-test records strategy metadata and requires strategy deviation reason
   assert.equal(linked.session.generatedTests[0].strategy, "state-integration");
   assert.equal(linked.session.generatedTests[0].linkedStrategy, "integration");
   assert.equal(readLedger(cwd)[0].strategy, "state-integration");
+});
+
+test("link-test rejects ungrounded domain substitutions unless a deviation reason is recorded", () => {
+  const cwd = jestOnlyProject();
+  let session = createSession({ url: "http://localhost:3000", description: "Rename selected diagram node", cwd });
+  session = updateState(session.id, states.RECORDING, cwd);
+  session = updateState(session.id, states.CAPTURED, cwd);
+  const capture = {
+    events: [
+      { id: "evt-1", type: "click", selector: "canvas", label: "" },
+      { id: "evt-2", type: "input", selector: "#node-name", label: "Node name", labelSource: "label", value: "[MASKED]" },
+    ],
+    network: [],
+    console: [{ id: "con-1", type: "log", message: "Rendering DiagramCanvas { selectedNodeId: node-95 }" }],
+    screenshots: [{ id: "shot-1", path: "screenshots/0001.png", label: "final" }],
+  };
+  writeCaptureBuffer(session.id, capture, cwd);
+  writeIndex(session, capture, cwd);
+  generateScenario(session.id, cwd);
+  approveScenario(session.id, cwd);
+  generateCoveragePlan(session.id, cwd);
+  approveCoveragePlan(session.id, cwd);
+  addEvidenceFact({
+    sessionId: session.id,
+    fact: "Final screenshot shows node name 95-t.",
+    source: "screenshots/0001.png",
+    classification: "observed",
+    cwd,
+  });
+  const testFile = "tests/rename-selected-diagram-node.test.ts";
+  fs.writeFileSync(path.join(cwd, testFile), "const nodeName = 'Captured e2e node';\ntest('works', () => expect(['node-250', '95-z', nodeName]).toBeTruthy());\n");
+
+  assert.throws(() => linkGeneratedTest({
+    sessionId: session.id,
+    file: testFile,
+    command: "npm run test",
+    cwd,
+  }), { name: "LedgerConsistencyError" });
+  assert.equal(readSession(session.id, cwd).verification.evidenceValidation.status, "failed");
+  assert.equal(readLedger(cwd)[0].status, "blocked");
+  assert.ok(readLedger(cwd)[0].evidenceValidation.unexpectedLiterals.some((item) => item.value === "Captured e2e node"));
+
+  const linked = linkGeneratedTest({
+    sessionId: session.id,
+    file: testFile,
+    command: "npm run test",
+    deviationReason: "Uses a synthetic stable fixture node instead of the observed node.",
+    cwd,
+  });
+  assert.deepEqual(linked.session.generatedTests[0].evidenceValidation.unexpectedDomainTokens, ["node-250", "95-z"]);
+  assert.ok(linked.session.generatedTests[0].evidenceValidation.unexpectedLiterals.some((item) => item.value === "Captured e2e node"));
+  assert.equal(linked.session.verification.evidenceValidation.status, "warning");
+  assert.deepEqual(readLedger(cwd)[0].evidenceValidation.unexpectedDomainTokens, ["node-250", "95-z"]);
+});
+
+test("link-test rejects raw canvas browser replay when evidence requires instrumentation", () => {
+  const cwd = tempProject();
+  let session = createSession({ url: "http://localhost:3000", description: "Rename selected diagram node", cwd });
+  session = updateState(session.id, states.RECORDING, cwd);
+  session = updateState(session.id, states.CAPTURED, cwd);
+  const capture = {
+    events: [
+      { id: "evt-1", type: "click", selector: "canvas", label: "" },
+      { id: "evt-2", type: "input", selector: "#node-name", label: "Node name", labelSource: "label", value: "[MASKED]" },
+    ],
+    network: [],
+    console: [],
+  };
+  writeCaptureBuffer(session.id, capture, cwd);
+  writeIndex(session, capture, cwd);
+  generateScenario(session.id, cwd);
+  approveScenario(session.id, cwd);
+  generateCoveragePlan(session.id, cwd);
+  approveCoveragePlan(session.id, cwd);
+  const testFile = "e2e/rename-selected-diagram-node.spec.ts";
+  fs.writeFileSync(path.join(cwd, testFile), "test('raw replay', async ({ page }) => { await page.locator('canvas').click({ position: { x: 10, y: 20 } }); });\n");
+
+  assert.throws(() => linkGeneratedTest({
+    sessionId: session.id,
+    file: testFile,
+    command: "npx playwright test",
+    deviationReason: "Temporary browser coverage.",
+    cwd,
+  }), { name: "LedgerConsistencyError" });
+  assert.equal(readSession(session.id, cwd).verification.evidenceValidation.rawCanvasReplay, true);
+  assert.equal(readLedger(cwd)[0].status, "blocked");
 });
 
 test("triages selector failures with capture evidence", () => {

@@ -5,11 +5,15 @@ import { add_intent_marker } from "./agent-tools.mjs";
 import { detectRepo } from "./repo.mjs";
 import { recordInteractiveCapture, recordScriptedCapture } from "./recorder.mjs";
 import {
+  addEvidenceFact,
+  approveEvidenceFact,
   approveCoveragePlan,
   approveScenario,
   finalizeCapture,
   generateCoveragePlan,
+  generateEvidencePack,
   generateScenario,
+  generateTestOutline,
   linkGeneratedTest,
   triageSessionFailure,
   writeSessionSummaries,
@@ -60,6 +64,10 @@ Commands:
   screenshots <session-id>
   selectors <session-id>
   selector-automation <session-id>
+  evidence-pack <session-id>
+  test-outline <session-id>
+  evidence-add <session-id> --fact <text> --source <event-id|artifact-path> --classification observed|inferred|substituted|masked [--requires-approval]
+  evidence-approve <session-id> --fact-id <fact-id>
   mark <session-id> --type assert|ignore|setup|bug|persist-after-reload|split-test [--note <text>] [--step <event-id>]
   coverage-plan <session-id>
   approve-scenario <session-id>
@@ -110,6 +118,43 @@ function directorySizeBytes(dir) {
   return total;
 }
 
+async function checkTarget(url) {
+  if (!url) return null;
+  try {
+    const response = await fetch(url, { method: "HEAD", redirect: "manual" });
+    return {
+      url,
+      reachable: true,
+      status: response.status,
+    };
+  } catch (error) {
+    return {
+      url,
+      reachable: false,
+      error: error.message,
+    };
+  }
+}
+
+function firstErrorLine(error) {
+  return String(error?.message ?? error)
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .split("\n")
+    .find((line) => line.trim())
+    ?.trim() ?? "unknown error";
+}
+
+async function checkChromiumLaunch() {
+  try {
+    const playwright = await import("playwright");
+    const browser = await playwright.chromium.launch({ headless: true });
+    await browser.close();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: firstErrorLine(error) };
+  }
+}
+
 function compactSession(session) {
   const generatedTests = (session.generatedTests ?? []).map((item) => typeof item === "string" ? item : item.file);
   const bytes = directorySizeBytes(sessionDir(session.id));
@@ -125,19 +170,30 @@ function compactSession(session) {
   };
 }
 
-function doctorText({ ok, repo, playwrightImportable, nextActions }) {
-  return `Test Capture doctor
-
-Status: ${ok ? "ok" : "needs attention"}
-Repo: ${repo.root}
-Branch: ${repo.branch}
-Package manager: ${repo.packageManager}
-Playwright importable: ${playwrightImportable ? "yes" : "no"}
-.test-capture gitignored: ${repo.gitignoreWarnings.length ? "no" : "yes"}
-
-Next actions:
-${nextActions.length ? nextActions.map((item) => `- ${item}`).join("\n") : "- None"}
-`;
+function doctorText({ ok, repo, playwrightImportable, chromiumLaunchable, target, nextActions }) {
+  const lines = [
+    "Test Capture doctor",
+    "",
+    `Status: ${ok ? "ok" : "needs attention"}`,
+    `Repo: ${repo.root}`,
+    `Branch: ${repo.branch}`,
+    `Package manager: ${repo.packageManager}`,
+    `Playwright importable: ${playwrightImportable ? "yes" : "no"}`,
+    `Chromium launchable: ${chromiumLaunchable.ok ? "yes" : "no"}`,
+  ];
+  if (!chromiumLaunchable.ok) lines.push(`Chromium issue: ${chromiumLaunchable.error}`);
+  lines.push(
+    `Target URL: ${target ? target.url : "not checked"}`,
+    `Target reachable: ${target ? (target.reachable ? `yes (${target.status})` : "no") : "not checked"}`,
+  );
+  if (target && !target.reachable) lines.push(`Target issue: ${target.error}`);
+  lines.push(
+    `.test-capture gitignored: ${repo.gitignoreWarnings.length ? "no" : "yes"}`,
+    "",
+    "Next actions:",
+    nextActions.length ? nextActions.map((item) => `- ${item}`).join("\n") : "- None",
+  );
+  return `${lines.join("\n")}\n`;
 }
 
 async function hasPlaywright() {
@@ -162,13 +218,27 @@ export async function runCli(args) {
       return;
     case "doctor": {
       const repo = detectRepo();
+      const playwrightImportable = await hasPlaywright();
+      const chromiumLaunchable = playwrightImportable ? await checkChromiumLaunch() : { ok: false, error: "Playwright is not importable" };
+      const target = await checkTarget(flags.url);
       const doctor = {
-        ok: repo.gitignoreWarnings.length === 0,
+        ok: repo.gitignoreWarnings.length === 0
+          && playwrightImportable
+          && chromiumLaunchable.ok
+          && (!target || target.reachable),
         repo,
-        playwrightImportable: await hasPlaywright(),
+        playwrightImportable,
+        chromiumLaunchable,
+        target,
         nextActions: [
           ...(repo.gitignoreWarnings.length ? ["Add .test-capture/ to .gitignore"] : []),
-          ...((await hasPlaywright()) ? [] : ["Install Playwright in the host project to enable browser capture"]),
+          ...(playwrightImportable ? [] : ["Install Playwright where the runner executes, or install the Codex skill with `npm run install:codex-skill`"]),
+          ...(playwrightImportable && !chromiumLaunchable.ok
+            ? [/Executable doesn't exist|Please run|install/i.test(chromiumLaunchable.error)
+              ? "Run `npx playwright install chromium`, then rerun doctor"
+              : "Allow Chromium to launch in this environment, then rerun doctor"]
+            : []),
+          ...(target && !target.reachable ? ["Start the target app server or pass the correct --url"] : []),
         ],
       };
       print(json ? doctor : doctorText(doctor), json);
@@ -272,6 +342,37 @@ export async function runCli(args) {
     case "selector-automation": {
       const sessionId = requireArg(positionals[0], "selector-automation requires <session-id>");
       print(selectorAutomationAnalysis(readIndex(sessionId)), true);
+      return;
+    }
+    case "evidence-pack": {
+      const sessionId = requireArg(positionals[0], "evidence-pack requires <session-id>");
+      const { content, pack } = generateEvidencePack(sessionId);
+      print(json ? pack : content, json);
+      return;
+    }
+    case "test-outline": {
+      const sessionId = requireArg(positionals[0], "test-outline requires <session-id>");
+      const { content, outline } = generateTestOutline(sessionId);
+      print(json ? outline : content, json);
+      return;
+    }
+    case "evidence-add": {
+      const sessionId = requireArg(positionals[0], "evidence-add requires <session-id>");
+      print(addEvidenceFact({
+        sessionId,
+        fact: requireArg(flags.fact, "evidence-add requires --fact <text>"),
+        source: requireArg(flags.source, "evidence-add requires --source <event-id|artifact-path>"),
+        classification: requireArg(flags.classification, "evidence-add requires --classification observed|inferred|substituted|masked"),
+        requiresApproval: Boolean(flags["requires-approval"]),
+      }), true);
+      return;
+    }
+    case "evidence-approve": {
+      const sessionId = requireArg(positionals[0], "evidence-approve requires <session-id>");
+      print(approveEvidenceFact({
+        sessionId,
+        factId: requireArg(flags["fact-id"], "evidence-approve requires --fact-id <fact-id>"),
+      }), true);
       return;
     }
     case "mark": {

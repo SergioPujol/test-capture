@@ -39,6 +39,7 @@ export function upsertLedgerEntry({ session, scenario, generatedTests = [], stat
     assertionIds: session.coveragePlan?.assertionIds ?? [],
     strategy: session.coveragePlan?.strategy,
     strategyLabel: session.coveragePlan?.strategyLabel,
+    evidenceValidation: session.verification?.evidenceValidation ?? null,
     status,
     command,
     lastVerified: nowIso(),

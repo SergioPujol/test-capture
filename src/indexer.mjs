@@ -10,6 +10,36 @@ function selectorQuality(selector) {
   return "review";
 }
 
+function recommendedLocatorForEvent(event = {}) {
+  const label = String(event.label || "").trim();
+  if (event.type === "input" && label && ["label", "aria-label"].includes(event.labelSource)) {
+    return {
+      recommendedLocator: `page.getByLabel(${JSON.stringify(label)})`,
+      recommendationConfidence: "high",
+      recommendationReason: "Element has an accessible label.",
+    };
+  }
+  if (event.selector && /\[data-testid=/.test(event.selector)) {
+    const testId = event.selector.match(/\[data-testid=["']([^"']+)["']\]/)?.[1];
+    if (testId) {
+      return {
+        recommendedLocator: `page.getByTestId(${JSON.stringify(testId)})`,
+        recommendationConfidence: "high",
+        recommendationReason: "Selector uses a stable data-testid.",
+      };
+    }
+  }
+  if (event.type === "click" && label && !/canvas|svg/i.test(event.selector || "")) {
+    const role = event.role || (/^button\b|button\[|\[role=["']button["']\]/i.test(event.selector || "") ? "button" : /^a\b|a\[|\[role=["']link["']\]/i.test(event.selector || "") ? "link" : "button");
+    return {
+      recommendedLocator: `page.getByRole(${JSON.stringify(role)}, { name: ${JSON.stringify(label)} })`,
+      recommendationConfidence: role === "button" || role === "link" ? "high" : "medium",
+      recommendationReason: "Click target has visible or accessible text.",
+    };
+  }
+  return {};
+}
+
 export function buildAgentSafeIndex(session, capture = {}) {
   const events = (capture.events ?? []).map((event, index) => {
     const redacted = redactEvent(event, session.privacy ?? {});
@@ -57,11 +87,17 @@ export function buildAgentSafeIndex(session, capture = {}) {
     sensitive: true,
     provenance: provenance.toolGenerated,
   }));
-  const selectorCandidates = [...new Set(events.map((event) => event.selector).filter(Boolean))].map((selector) => ({
-    selector,
-    quality: selectorQuality(selector),
-    provenance: provenance.toolGenerated,
-  }));
+  const selectorCandidates = [...new Set(events.map((event) => event.selector).filter(Boolean))].map((selector) => {
+    const event = events.find((item) => item.selector === selector) ?? {};
+    return {
+      selector,
+      quality: selectorQuality(selector),
+      eventId: event.id,
+      label: event.label,
+      ...recommendedLocatorForEvent(event),
+      provenance: provenance.toolGenerated,
+    };
+  });
 
   return {
     schemaVersion,

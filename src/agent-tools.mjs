@@ -1,5 +1,5 @@
 import { createSession, appendHumanMarker, listSessions, readIndex, readSession, sessionDir, writeTextArtifact } from "./session-store.mjs";
-import { finalizeCapture, generateCoveragePlan, generateScenario, triageSessionFailure } from "./operations.mjs";
+import { addEvidenceFact, approveEvidenceFact, finalizeCapture, generateCoveragePlan, generateEvidencePack, generateScenario, generateTestOutline, triageSessionFailure } from "./operations.mjs";
 import { readLedger } from "./ledger.mjs";
 import { draftAgentContext, draftTestability, selectorAutomationAnalysis } from "./artifacts.mjs";
 import { nowIso } from "./time.mjs";
@@ -43,6 +43,22 @@ export function get_selector_candidates({ sessionId, cwd = process.cwd() }) {
 
 export function get_selector_automation({ sessionId, cwd = process.cwd() }) {
   return selectorAutomationAnalysis(readIndex(sessionId, cwd));
+}
+
+export function get_evidence_pack({ sessionId, cwd = process.cwd() }) {
+  return generateEvidencePack(sessionId, cwd);
+}
+
+export function get_test_outline({ sessionId, cwd = process.cwd() }) {
+  return generateTestOutline(sessionId, cwd);
+}
+
+export function add_evidence_fact({ sessionId, fact, source, classification, requiresApproval = false, cwd = process.cwd() }) {
+  return addEvidenceFact({ sessionId, fact, source, classification, requiresApproval, cwd });
+}
+
+export function approve_evidence_fact({ sessionId, factId, cwd = process.cwd() }) {
+  return approveEvidenceFact({ sessionId, factId, cwd });
 }
 
 export function get_coverage_plan({ sessionId, cwd = process.cwd() }) {

@@ -87,6 +87,80 @@ test("CLI exposes report, console summary, app-only network, compact sessions, a
 
     const doctor = await captureOutput(() => runCli(["doctor"]));
     assert.match(doctor, /Test Capture doctor/);
-    assert.match(doctor, /Status: ok/);
+    assert.match(doctor, /Status: /);
+    assert.match(doctor, /Chromium launchable: /);
+    assert.match(doctor, /Target URL: not checked/);
+  });
+});
+
+test("doctor reports target URL failures in machine-readable setup status", async () => {
+  const cwd = tempProject();
+  const url = "http://127.0.0.1:9";
+
+  await withCwd(cwd, async () => {
+    const doctor = JSON.parse(await captureOutput(() => runCli(["doctor", "--url", url, "--json"])));
+    assert.equal(doctor.ok, false);
+    assert.equal(doctor.target.url, url);
+    assert.equal(doctor.target.reachable, false);
+    assert.match(doctor.nextActions.join("\n"), /Start the target app server/);
+  });
+});
+
+test("CLI exposes evidence-pack, test-outline, and evidence-add", async () => {
+  const cwd = tempProject();
+  const session = capturedSession(cwd);
+
+  await withCwd(cwd, async () => {
+    const pack = await captureOutput(() => runCli(["evidence-pack", session.id]));
+    assert.match(pack, /# Evidence Pack/);
+    assert.match(pack, /Field Admin email was edited; typed value is masked/);
+
+    const jsonPack = JSON.parse(await captureOutput(() => runCli(["evidence-pack", session.id, "--json"])));
+    assert.equal(jsonPack.sessionId, session.id);
+    assert.ok(jsonPack.facts.some((fact) => fact.classification === "masked"));
+
+    const added = JSON.parse(await captureOutput(() => runCli([
+      "evidence-add",
+      session.id,
+      "--fact",
+      "Final screenshot shows node name 95-t.",
+      "--source",
+      "screenshots/0002.png",
+      "--classification",
+      "observed",
+    ])));
+    assert.equal(added.fact.fact, "Final screenshot shows node name 95-t.");
+    assert.equal(added.fact.classification, "observed");
+    assert.equal(typeof added.fact.approvedAt, "string");
+
+    const outline = await captureOutput(() => runCli(["test-outline", session.id]));
+    assert.match(outline, /# Test Outline/);
+    assert.match(outline, /Final screenshot shows node name 95-t/);
+
+    const jsonOutline = JSON.parse(await captureOutput(() => runCli(["test-outline", session.id, "--json"])));
+    assert.equal(jsonOutline.sessionId, session.id);
+    assert.ok(Array.isArray(jsonOutline.requiredAssertions));
+
+    const pending = JSON.parse(await captureOutput(() => runCli([
+      "evidence-add",
+      session.id,
+      "--fact",
+      "Reviewer confirmed screenshot value 95-t.",
+      "--source",
+      "screenshots/0002.png",
+      "--classification",
+      "observed",
+      "--requires-approval",
+    ])));
+    assert.equal(pending.fact.approvedAt, null);
+
+    const approved = JSON.parse(await captureOutput(() => runCli([
+      "evidence-approve",
+      session.id,
+      "--fact-id",
+      pending.fact.id,
+    ])));
+    assert.equal(approved.fact.id, pending.fact.id);
+    assert.equal(typeof approved.fact.approvedAt, "string");
   });
 });
