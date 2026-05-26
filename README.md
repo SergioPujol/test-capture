@@ -2,13 +2,15 @@
 
 ![Test Capture turns manual browser verification into agent evidence and repo-native tests.](docs/assets/test-capture-hero.png)
 
-Test Capture is an agent-native workflow for Codex: you manually verify a feature in a browser once, and Codex uses the captured evidence to write, run, fix, and link a maintainable test in your repository.
+Test Capture is an agent-native workflow for Codex and Claude Code: you manually verify a feature in a browser once, and your coding agent uses the captured evidence to write, run, fix, and link a maintainable test in your repository.
 
 It is not a generic test recorder. It is the missing browser-evidence layer for coding agents.
 
 ## Install
 
-Test Capture is easiest to use as a Codex skill. Install it once on the machine where Codex runs:
+Test Capture is easiest to use as an agent skill. Install it once on the machine where your coding agent runs.
+
+For Codex:
 
 ```sh
 git clone https://github.com/SergioPujol/test-capture.git
@@ -17,19 +19,28 @@ npm install
 npm run install:codex-skill
 ```
 
-Then restart Codex or start a new thread. The `/test-capture` skill will be available from any application repository.
+For Claude Code:
 
-The package requires Node.js 20 or newer. The Codex skill install bundles the runner and Playwright dependencies into `~/.codex/skills/test-capture`, so the app being tested does not need to add Test Capture as a project dependency.
+```sh
+git clone https://github.com/SergioPujol/test-capture.git
+cd test-capture
+npm install
+npm run install:claude-skill
+```
+
+Then restart the agent or start a new session. The `/test-capture` skill will be available from any application repository.
+
+The package requires Node.js 20 or newer. The skill installers bundle the runner and Playwright dependencies into `~/.codex/skills/test-capture` for Codex or `~/.claude/skills/test-capture` for Claude Code, so the app being tested does not need to add Test Capture as a project dependency.
 
 ## First Run
 
-Start your app locally, then ask Codex from the target application repo:
+Start your app locally, then ask Codex or Claude from the target application repo:
 
 ```txt
 /test-capture --url http://localhost:3000 --description "Customer can save billing email"
 ```
 
-Codex should then run the full loop:
+The agent should then run the full loop:
 
 1. Launch the capture browser for your local app.
 2. Wait while you manually click through and verify the feature.
@@ -43,15 +54,23 @@ Codex should then run the full loop:
 
 Run Test Capture from the app repo you are testing, not from a separate scratch directory. The `.test-capture/` artifacts, coverage plan, and ledger are meant to live beside the code and tests they describe.
 
-If anything fails before the browser opens, run the setup check from the target app repo:
+If anything fails before the browser opens, run the setup check from the target app repo.
+
+Codex install:
 
 ```sh
 node ~/.codex/skills/test-capture/bin/test-capture.js doctor --url http://localhost:3000
 ```
 
+Claude Code install:
+
+```sh
+node ~/.claude/skills/test-capture/bin/test-capture.js doctor --url http://localhost:3000
+```
+
 `doctor` verifies the current repo, `.test-capture/` gitignore status, Playwright availability, Chromium launchability, and target URL reachability.
 
-## What Codex Gets
+## What The Agent Gets
 
 Test Capture gives the agent structured local evidence instead of a vague prompt:
 
@@ -84,7 +103,7 @@ npm run capture-target:dev
 
 ## CLI Fallback
 
-Codex is the intended interface, but every core operation is also available from the CLI:
+Codex and Claude Code skills are the intended interfaces, but every core operation is also available from the CLI:
 
 ```sh
 node ~/.codex/skills/test-capture/bin/test-capture.js doctor --url http://localhost:3000
@@ -104,6 +123,8 @@ node ~/.codex/skills/test-capture/bin/test-capture.js coverage-plan <session-id>
 node ~/.codex/skills/test-capture/bin/test-capture.js approve-coverage-plan <session-id>
 node ~/.codex/skills/test-capture/bin/test-capture.js link-test <session-id> --file <test-file> --command "<test-command>" --status passing
 ```
+
+For a Claude Code install, replace `~/.codex/skills/test-capture` with `~/.claude/skills/test-capture`.
 
 When working inside this repository, use the local runner directly:
 

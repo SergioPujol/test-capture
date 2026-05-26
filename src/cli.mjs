@@ -232,7 +232,7 @@ export async function runCli(args) {
         target,
         nextActions: [
           ...(repo.gitignoreWarnings.length ? ["Add .test-capture/ to .gitignore"] : []),
-          ...(playwrightImportable ? [] : ["Install Playwright where the runner executes, or install the Codex skill with `npm run install:codex-skill`"]),
+          ...(playwrightImportable ? [] : ["Install Playwright where the runner executes, or install the agent skill with `npm run install:codex-skill` or `npm run install:claude-skill`"]),
           ...(playwrightImportable && !chromiumLaunchable.ok
             ? [/Executable doesn't exist|Please run|install/i.test(chromiumLaunchable.error)
               ? "Run `npx playwright install chromium`, then rerun doctor"

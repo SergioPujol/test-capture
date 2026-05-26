@@ -2,4 +2,4 @@
 
 import { installAgentSkill } from "./install-agent-skill.mjs";
 
-installAgentSkill("codex");
+installAgentSkill("claude");
